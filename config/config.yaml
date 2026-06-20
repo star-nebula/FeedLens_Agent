@@ -1,0 +1,78 @@
+﻿# config.yaml — FeedLens MVP 配置
+# 所有标注"可调"的参数均通过此文件读取
+
+# --- 大模型配置 ---
+llm:
+  provider: deepseek
+  deepseek:
+    api_key: ${DEEPSEEK_API_KEY}                                  # 从环境变量读取，也可直接填 Key
+    base_url: https://api.deepseek.com/v1
+    model: deepseek-chat
+    temperature: 0.7
+    max_tokens: 4096
+
+# --- Embedding 模型配置 ---
+embedding:
+  model_name: BAAI/bge-small-zh-v1.5
+  device: cpu                  # cpu | cuda
+
+# --- 调度器配置 ---
+scheduler:
+  cron_time: "06:00"           # 每日简报触发时间
+  timezone: "Asia/Shanghai"
+
+# --- Agent 约束 ---
+agents:
+  max_react_cycles: 3          # ReAct 循环上限
+  max_retry: 2                 # 简报重试上限
+  max_sub_agents_per_plan: 3   # 单次 plan 子 Agent 数量上限
+  max_same_agent_calls: 2      # 同一子 Agent 重复调度上限
+
+# --- 排序 & 去重 ---
+ranking:
+  dedup_threshold: 0.88        # 去重高阈值（>= 此值判重）
+  dedup_llm_lower: 0.70        # 去重低阈值（<= 此值保留）
+  max_llm_adjudications: 20    # LLM 裁决上限
+  dedup_hard_threshold: 0.80   # 超限硬判阈值
+  quality_threshold: 0.7       # 简报质量阈值
+  cold_start_feedback_threshold: 3  # 冷启动→偏好切换所需反馈数
+  half_life_hours: 24          # 时间衰减半衰期
+  source_diversity_bonus: 0    # 来源多样性加分（P0=0, P1=0.05）
+
+# --- 反馈系统 ---
+feedback:
+  feedback_bias_positive: 0.15    # like 临时补偿
+  feedback_bias_negative: -0.10   # dislike 临时补偿
+  feedback_bias_irrelevant: -0.15 # irrelevant 临时补偿
+  ema_alpha: 0.3                  # EMA 平滑系数
+  preference_cleanup_threshold: 0.1  # 偏好自动清理阈值
+
+# --- 排序权重：冷启动（反馈 < 3 条）---
+weights_cold:
+  similarity: 0.40
+  recency: 0.25
+  preference: 0.10
+  importance: 0.25
+
+# --- 排序权重：有反馈（反馈 >= 3 条）---
+weights_warm:
+  similarity: 0.30
+  recency: 0.20
+  preference: 0.40
+  importance: 0.10
+
+# --- 重大事件推送 ---
+breaking_news:
+  score_threshold: 0.85        # 破例推送分数阈值
+  freshness_hours: 2           # 破例推送时效阈值
+
+# --- 记忆 ---
+memory:
+  short_term_window: 15        # 短期记忆滑动窗口（轮数）
+
+# --- 数据管理 ---
+data:
+  retention_days: 30           # 过期数据清理天数
+  min_items_for_brief: 3       # 生成简报的最低条目数
+  db_path: data/feedlens.db    # SQLite 数据库路径
+  chroma_path: data/chroma     # ChromaDB 持久化路径
