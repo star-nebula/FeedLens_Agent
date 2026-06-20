@@ -1,4 +1,4 @@
-﻿# FeedLens — 主动式信息聚合 Agent 系统
+# FeedLens — 主动式信息聚合 Agent 系统
 
 FeedLens 是一个基于 LangGraph 的多 Agent 智能体系统，能够**自主规划、定时执行、个性化筛选**信息，生成每日简报并推送。
 
@@ -104,24 +104,28 @@ FeedLens_Agent/
 │   ├── database.py            # SQLite 数据库 (11 表)
 │   └── vector_store.py        # ChromaDB 向量存储 (3 集合)
 ├── utils/             # 工具模块
+│   ├── config.py             # 配置加载
 │   ├── llm_provider.py        # LLM Provider 抽象
 │   ├── embedding.py           # bge-small-zh-v1.5 封装
 │   ├── memory_manager.py      # 记忆管理（短期/长期/情节）
 │   ├── logging_config.py      # structlog 配置
-│   └── error_isolation.py     # 任务级错误隔离
+│   ├── error_isolation.py     # 任务级错误隔离
+│   └── pipeline_runner.py      # Pipeline 流程执行器
 ├── scheduler/         # 调度器
 │   └── push_scheduler.py      # APScheduler 定时推送
 ├── ui/                # Streamlit 前端
-│   ├── app.py                 # 入口
-│   └── pages/                 # 页面
+│   ├── __init__.py
+│   └── pages/                 # 页面（dashboard/feedback/goal/home/logs/sources）
 ├── config/            # 配置
 │   └── config.yaml
 ├── scripts/           # 脚本 + 测试
-│   ├── init_db.py
-│   ├── calibrate_dedup.py
-│   ├── test_data/sample_feed.xml
-│   ├── test_*.py              # 测试脚本
-│   └── ...
+│   ├── init_db.py             # 数据库初始化
+│   ├── download_models.py     # 模型下载
+│   ├── calibrate_dedup.py     # 去重校准
+│   ├── test_data/
+│   │   └── sample_feed.xml    # 测试数据
+│   └── test_*.py              # 测试脚本（共16个）
+├── app.py              # Streamlit 入口
 └── docs/              # 文档
     ├── FeedLens_MVP_Design_Document.md   # MVP 设计文档 (v1.0)
     ├── FeedLens_MVP_Design_Document_v1.1.md  # 改进补充 (v1.1)
