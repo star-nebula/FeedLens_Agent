@@ -1,4 +1,4 @@
-﻿"""
+"""
 FeedLens 全局状态定义 — FeedLensState TypedDict。
 
 供主 Agent 和所有子 Agent 共享，是 LangGraph StateGraph 的核心数据载体。
@@ -53,6 +53,7 @@ class FeedLensState(TypedDict, total=False):
 
     # ---- 反馈 ----
     feedback_results: list[dict[str, Any]]   # 反馈子 Agent 处理结果
+    feedback_count: int                      # 累计反馈数（用于冷启动/偏好切换判断）
 
     # ---- 记忆 ----
     short_term_memory: list[dict[str, Any]]  # 最近 15 轮摘要

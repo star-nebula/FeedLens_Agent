@@ -114,6 +114,7 @@ def _build_briefing_prompt(
                 f"- [{item.get('id', f'item_{i}')}] {item.get('title', '')}\n"
                 f"  摘要: {item.get('summary', '')[:100]}\n"
                 f"  来源: {item.get('source', 'unknown')} | "
+                f"  时间: {item.get('published_at', '')} | "
                 f"重要性: {item.get('importance', 3)}/5"
             )
         if len(cat_items) > 5:
@@ -147,6 +148,54 @@ def _build_briefing_prompt(
 请直接输出 JSON，不要添加markdown代码块标记。
 """
     return prompt
+
+
+def _build_item_index(ranked_items: List[Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+    """按 id 建立 ranked_items 索引，用于回填 LLM 简报里的结构化字段。"""
+    index = {}
+    for item in ranked_items:
+        item_id = item.get("id", "")
+        if item_id:
+            index[item_id] = item
+    return index
+
+
+# 回填时强制以原始数据为准的结构化字段（不信任 LLM 对这些字段的改写）
+_BACKFILL_FIELDS = ["published_at", "source", "url", "importance", "category"]
+
+
+def _backfill_briefing_items(briefing: Dict[str, Any], item_index: Dict[str, Dict[str, Any]]) -> None:
+    """用原始 ranked_items 回填简报条目的结构化字段（就地修改）。
+
+    确保时间/来源/URL/重要性等字段不因 LLM 改写而丢失或留空。
+    """
+    for cat_group in briefing.get("categories", []):
+        for item in cat_group.get("items", []):
+            item_id = item.get("id", "")
+            orig = item_index.get(item_id)
+            if not orig:
+                continue
+            for field in _BACKFILL_FIELDS:
+                orig_val = orig.get(field)
+                if orig_val not in (None, "", []):
+                    cur = item.get(field)
+                    if cur in (None, "", []):
+                        item[field] = orig_val
+                    else:
+                        # 客观事实字段一律以原始数据为准（不信任 LLM 改写）
+                        # - importance: 数值，原值更准
+                        # - source: 来源是客观事实，防止 LLM 把多源改写成单一来源
+                        if isinstance(orig_val, (int, float)) or field in ("source", "url"):
+                            item[field] = orig_val
+                        # 文本类（published_at 等）保留 LLM 文本但确保非空
+                elif item.get(field) in (None, "", []):
+                    # 原始也没有时给默认值，避免渲染留空
+                    if field == "published_at":
+                        item[field] = "未知时间"
+                    elif field == "source":
+                        item[field] = "unknown"
+                    elif field == "importance":
+                        item[field] = 3
 
 
 def _parse_json_response(text: str) -> Dict[str, Any]:
@@ -362,6 +411,11 @@ def generate_briefing_node(state: FeedLensState) -> dict:
             "categories": fallback_categories,
             "generated_at": "",
         }
+
+    # 方案 B：用原始 ranked_items 回填结构化字段（published_at/source/url/importance 等），
+    # 避免 LLM 改写或遗漏导致时间留空、来源丢失。
+    item_index = _build_item_index(items_to_show)
+    _backfill_briefing_items(briefing, item_index)
 
     # 补充 similar_count（类似报道数量）
     for cat_group in briefing.get("categories", []):

@@ -259,12 +259,18 @@ def _extract_source_name(source_url: str) -> str:
     if not source_url:
         return "unknown"
     known_names = {
+        # 新源（国内可直连）
+        "https://36kr.com/feed": "36氪",
+        "https://sspai.com/feed": "少数派",
+        "https://www.ruanyifeng.com/blog/atom.xml": "阮一峰周刊",
+        "https://www.solidot.org/index.rss": "Solidot",
+        "https://feeds.bbci.co.uk/news/technology/rss.xml": "BBC",
+        # 旧源（rsshub.app，保留映射以便历史数据回显）
         "https://rsshub.app/solidot/": "Solidot",
         "https://rsshub.app/36kr/information/web_news/": "36氪",
         "https://rsshub.app/36kr/news/latest": "36氪",
         "https://rsshub.app/zhihu/daily": "知乎日报",
         "https://rsshub.app/v2ex/topics/latest": "V2EX",
-        "https://feeds.bbci.co.uk/news/technology/rss.xml": "BBC",
         "https://rsshub.app/github/trending/daily": "GitHub",
     }
     if source_url in known_names:

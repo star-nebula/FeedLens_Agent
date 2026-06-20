@@ -57,6 +57,87 @@ def _get_db_path() -> str:
 
 
 # ============================================================
+# 排序辅助函数
+# ============================================================
+
+def _cosine(vec_a, vec_b) -> float:
+    """计算两个向量的余弦相似度（内联实现，无外部依赖）。"""
+    if not vec_a or not vec_b:
+        return 0.0
+    if len(vec_a) != len(vec_b):
+        return 0.0
+    dot = sum(a * b for a, b in zip(vec_a, vec_b))
+    mag1 = sum(a * a for a in vec_a) ** 0.5
+    mag2 = sum(b * b for b in vec_b) ** 0.5
+    if mag1 <= 0 or mag2 <= 0:
+        return 0.0
+    return dot / (mag1 * mag2)
+
+
+def _load_preference_vectors(user_id: int) -> tuple:
+    """从 ChromaDB user_preference 集合读取用户偏好向量（v_like / v_dislike）。
+
+    ID 格式与 feedback_agent.vector_add_node 保持一致：user_{id}_like / user_{id}_dislike。
+    返回 (v_like, v_dislike)，未找到则为 None。
+    """
+    try:
+        vs = _get_vector_store()
+        vs.init_collections()
+        col = vs.client.get_or_create_collection(
+            vs.COLLECTION_USER_PREF,
+            embedding_function=vs.chroma_embedding_fn,
+        )
+        result = col.get(ids=[f"user_{user_id}_like", f"user_{user_id}_dislike"])
+        v_like = None
+        v_dislike = None
+        embeddings = result.get("embeddings") or []
+        for idx, _id in enumerate(result.get("ids", [])):
+            emb = embeddings[idx] if idx < len(embeddings) else None
+            if _id.endswith("_like") and emb is not None:
+                v_like = list(emb)
+            elif _id.endswith("_dislike") and emb is not None:
+                v_dislike = list(emb)
+        return v_like, v_dislike
+    except Exception as e:
+        print(f"[rank_items] 读取偏好向量失败: {e}", flush=True)
+        return None, None
+
+
+def _load_ranking_config() -> dict:
+    """加载排序相关配置（权重、阈值、加分项），未配置时回退到 MVP 推荐默认值。"""
+    config = load_config()
+    cold = config.get("weights_cold", {})
+    warm = config.get("weights_warm", {})
+    weights_cold = {
+        "similarity": cold.get("similarity", 0.40),
+        "recency": cold.get("recency", 0.25),
+        "preference": cold.get("preference", 0.10),
+        "importance": cold.get("importance", 0.25),
+    }
+    weights_warm = {
+        "similarity": warm.get("similarity", 0.30),
+        "recency": warm.get("recency", 0.20),
+        "preference": warm.get("preference", 0.40),
+        "importance": warm.get("importance", 0.10),
+    }
+    ranking_cfg = config.get("ranking", {})
+    feedback_cfg = config.get("feedback", {})
+    return {
+        "weights_cold": weights_cold,
+        "weights_warm": weights_warm,
+        "cold_start_threshold": ranking_cfg.get("cold_start_feedback_threshold", 3),
+        "source_diversity_bonus": ranking_cfg.get("source_diversity_bonus", 0),
+        "feedback_bias_positive": feedback_cfg.get("feedback_bias_positive", 0.15),
+        "feedback_bias_negative": feedback_cfg.get("feedback_bias_negative", -0.10),
+        "feedback_bias_irrelevant": feedback_cfg.get("feedback_bias_irrelevant", -0.15),
+        # 去重阈值（config.ranking.*）
+        "dedup_threshold": ranking_cfg.get("dedup_threshold", 0.88),
+        "dedup_llm_lower": ranking_cfg.get("dedup_llm_lower", 0.70),
+        "dedup_hard_threshold": ranking_cfg.get("dedup_hard_threshold", 0.80),
+        "max_llm_adjudications": ranking_cfg.get("max_llm_adjudications", 20),
+    }
+
+# ============================================================
 # 节点定义
 # ============================================================
 
@@ -131,14 +212,15 @@ def deduplicate_node(state: FeedLensState) -> dict:
         embedding_model = _get_embedding_model()
         llm_provider = _get_llm_provider()
 
+        dedup_cfg = _load_ranking_config()
         unique_items, duplicate_pairs = deduplicate(
             items,
             vector_store=vs,
             embedding_model=embedding_model,
             llm_provider=llm_provider,
-            threshold_high=0.88,
-            threshold_low=0.70,
-            max_llm_adjudications=20,
+            threshold_high=dedup_cfg["dedup_threshold"],
+            threshold_low=dedup_cfg["dedup_llm_lower"],
+            max_llm_adjudications=dedup_cfg["max_llm_adjudications"],
         )
 
         # 更新 similar_count（统计每篇保留条目的相似篇数）
@@ -240,28 +322,36 @@ def rank_items_node(state: FeedLensState) -> dict:
     if not filtered_items:
         return {"ranked_items": [], "ranking_detail": {"total_items": 0, "prescreened_dropped": pre_drop}}
 
-    # ---- 1. 权重动态切换 ----
+    # ---- 1. 权重动态切换（从 config.yaml 读取）----
+    rank_cfg = _load_ranking_config()
     feedback_count = len(feedback_history)
-    is_cold_start = feedback_count < 3
-    if is_cold_start:
-        weights = {"similarity": 0.40, "recency": 0.25, "preference": 0.10, "importance": 0.25}
-    else:
-        weights = {"similarity": 0.30, "recency": 0.20, "preference": 0.40, "importance": 0.10}
+    is_cold_start = feedback_count < rank_cfg["cold_start_threshold"]
+    weights = rank_cfg["weights_cold"] if is_cold_start else rank_cfg["weights_warm"]
+    diversity_bonus = rank_cfg["source_diversity_bonus"]
 
     mode_label = "cold_start" if is_cold_start else "with_feedback"
     print(f"[rank_items] 权重: {mode_label} (feedback={feedback_count})", flush=True)
 
-    # ---- 2. 反馈偏差映射 ----
+    # ---- 2. 反馈偏差映射（数值从 config.yaml 读取）----
     feedback_bias_map = {}
     for fb in feedback_history:
         item_id = fb.get("item_id", "")
         fb_type = fb.get("feedback_type", "")
         if fb_type == "like":
-            feedback_bias_map[item_id] = 0.15
+            feedback_bias_map[item_id] = rank_cfg["feedback_bias_positive"]
         elif fb_type == "dislike":
-            feedback_bias_map[item_id] = -0.10
+            feedback_bias_map[item_id] = rank_cfg["feedback_bias_negative"]
         elif fb_type == "irrelevant":
-            feedback_bias_map[item_id] = -0.15
+            feedback_bias_map[item_id] = rank_cfg["feedback_bias_irrelevant"]
+
+    # ---- 2b. 读取用户偏好向量（warm 模式下用于 preference 余弦因子）----
+    user_id = state.get("user_id", 1)
+    v_like, v_dislike = (None, None)
+    if not is_cold_start:
+        v_like, v_dislike = _load_preference_vectors(user_id)
+        if v_like is None and v_dislike is None:
+            # 偏好向量尚未建立（首次进入 warm），降级为 similarity 代理
+            print("[rank_items] 偏好向量未就绪，preference 降级为 similarity 代理", flush=True)
 
     # ---- 3. 各因子计算 ----
     scored_items = []
@@ -289,12 +379,16 @@ def rank_items_node(state: FeedLensState) -> dict:
             except Exception:
                 recency_score = 0.5
 
-        # preference: cold_start 用 similarity 代理；有反馈用 feedback_bias 驱动
-        if is_cold_start:
+        # preference: cosine(item_embedding, user_preference_vector)
+        #   - cold_start / 偏好未就绪: 用 similarity 代理
+        #   - warm: (cos(item,v_like) - cos(item,v_dislike)) 归一化 [0,1]，再叠加 feedback_bias
+        if is_cold_start or (v_like is None and v_dislike is None):
             base_pref = similarity_score
         else:
-            fb_total = sum(feedback_bias_map.values())
-            base_pref = max(0.0, min(1.0, 0.5 + fb_total / max(feedback_count, 1)))
+            like_sim = _cosine(item_emb, v_like) if v_like else 0.0
+            dislike_sim = _cosine(item_emb, v_dislike) if v_dislike else 0.0
+            pref_raw = like_sim - dislike_sim  # [-1,1]
+            base_pref = max(0.0, min(1.0, 0.5 + pref_raw / 2.0))
         feedback_bias = feedback_bias_map.get(item_id, 0.0)
         preference_score = max(0.0, min(1.0, base_pref + feedback_bias))
 
@@ -311,7 +405,7 @@ def rank_items_node(state: FeedLensState) -> dict:
             + weights["recency"] * recency_score
             + weights["preference"] * preference_score
             + weights["importance"] * importance_score
-            + (0.05 if not is_cold_start else 0.0)  # P1: 来源多样性加分
+            + (diversity_bonus if not is_cold_start else 0.0)  # P1: 来源多样性加分（config）
         )
 
         scored_items.append({

@@ -22,6 +22,7 @@ from typing import List, Dict, Any
 
 from langgraph.graph import StateGraph, END
 from utils.config import load_config
+from utils.error_isolation import run_with_isolation
 from agents.state import FeedLensState
 from agents.collection_agent import build_collection_agent, _get_rss_sources, _get_search_query
 from agents.ranking_agent import build_ranking_agent
@@ -299,35 +300,36 @@ def invoke_sub_agent_node(state: FeedLensState) -> dict:
 
         print(f"[invoke_sub_agent] 执行子 Agent: {agent_name} (ReAct 第 {react_cycle} 轮)", flush=True)
 
-        try:
+        # 通过 run_with_isolation 隔离每个子 Agent：单个失败不阻断本轮其余子 Agent 调度
+        builder = {
+            "Collection": build_collection_agent,
+            "Ranking": build_ranking_agent,
+            "Briefing": build_briefing_agent,
+        }.get(agent_name)
+
+        if builder is None:
+            print(f"[invoke_sub_agent] 未知子 Agent: {agent_name}", flush=True)
+            continue
+
+        result_key = {"Collection": "collection_result", "Ranking": "ranking_result", "Briefing": "briefing_result"}[agent_name]
+        result = run_with_isolation(
+            f"sub_agent_{agent_name}",
+            lambda b=builder, cs=current_state: b().invoke(cs),
+            default_return={},
+        )
+        if isinstance(result, dict) and result:
+            current_state.update(result)
+            results[result_key] = result
             if agent_name == "Collection":
-                agent = build_collection_agent()
-                result = agent.invoke(current_state)
-                current_state.update(result)
-                results["collection_result"] = result
                 print(f"[invoke_sub_agent] Collection 完成: {len(result.get('collected_items', []))} 条", flush=True)
-
             elif agent_name == "Ranking":
-                agent = build_ranking_agent()
-                result = agent.invoke(current_state)
-                current_state.update(result)
-                results["ranking_result"] = result
-                ranked = result.get("ranked_items", [])
-                print(f"[invoke_sub_agent] Ranking 完成: {len(ranked)} 条", flush=True)
-
+                print(f"[invoke_sub_agent] Ranking 完成: {len(result.get('ranked_items', []))} 条", flush=True)
             elif agent_name == "Briefing":
-                agent = build_briefing_agent()
-                result = agent.invoke(current_state)
-                current_state.update(result)
-                results["briefing_result"] = result
                 print(f"[invoke_sub_agent] Briefing 完成", flush=True)
-
-            else:
-                print(f"[invoke_sub_agent] 未知子 Agent: {agent_name}", flush=True)
-
-        except Exception as e:
-            print(f"[invoke_sub_agent] {agent_name} 执行失败: {e}", flush=True)
-            results[f"{agent_name.lower()}_error"] = str(e)
+        else:
+            # 隔离返回默认值 {}（子 Agent 失败已记录日志），保留错误标记供 observe_results 评估
+            results[f"{agent_name.lower()}_error"] = "isolated_failure"
+            print(f"[invoke_sub_agent] {agent_name} 已隔离降级（返回默认空结果）", flush=True)
 
     # 将子 Agent 执行结果同步到顶层字段
     return {
@@ -381,7 +383,7 @@ def observe_results_node(state: FeedLensState) -> dict:
         "issues": issues,
     }
 
-    print(f"[observe] {'⚠' if needs_retry else '✓'} {'; '.join(issues) if issues else '质量合格'}", flush=True)
+    print(f"[observe] {'[WARN]' if needs_retry else '[OK]'} {'; '.join(issues) if issues else '质量合格'}", flush=True)
     return {
         "observation_result": observation,
         "react_cycle_count": state.get("react_cycle_count", 0) + 1,
@@ -419,7 +421,7 @@ def coordinator_reflect_node(state: FeedLensState) -> dict:
         issues.append("无排序条目")
 
     # 2. 简报质量检查
-    brief_quality = obs.get("brief_quality", 0.0)
+    brief_quality = obs.get("briefing_quality", state.get("brief_quality", 0.0))
     if brief_quality < 0.5:
         issues.append(f"简报质量过低 ({brief_quality:.2f})")
 
@@ -634,9 +636,9 @@ def update_memory_node(state: FeedLensState) -> dict:
     # 更新 ChromaDB 偏好向量（取 top 3 条的正向偏好）
     if ranked_items:
         try:
-            vs = VectorStore(persist_dir="data/chroma")
-            vs.init_collections()
             embedding_model = EmbeddingModel()
+            vs = VectorStore(persist_dir="data/chroma", embedding_fn=embedding_model.encode)
+            vs.init_collections()
 
             for item in ranked_items[:3]:
                 text = f"{item.get('title', '')} {item.get('summary', '')}"

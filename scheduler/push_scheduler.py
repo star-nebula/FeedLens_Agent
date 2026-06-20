@@ -45,8 +45,16 @@ def is_breaking_news(
         return False
 
     try:
+        # 兼容 ISO-8601 带时区（如 "...Z" 或 "+08:00"）与无时区两种格式：
+        # 统一转换为本地 naive datetime，再与 naive datetime.now() 相减，避免 aware-naive TypeError。
         pub_time = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
-        hours_diff = (datetime.now() - pub_time).total_seconds() / 3600
+        if pub_time.tzinfo is not None:
+            pub_time = pub_time.astimezone().replace(tzinfo=None)
+        now = datetime.now()
+        hours_diff = (now - pub_time).total_seconds() / 3600
+        if hours_diff < 0:
+            # 发布时间在未来（时钟漂移），视为 0 时效
+            hours_diff = 0.0
         if hours_diff > freshness_hours:
             return False
     except Exception:

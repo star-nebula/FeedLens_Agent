@@ -1,4 +1,4 @@
-﻿"""
+"""
 采集 Agent — RSS 采集 + 搜索补充 + 元数据提取 + 标准化。
 
 工作流: fetch_rss → (search_web?) → enrich_metadata → normalize_items
@@ -7,6 +7,7 @@ ReAct: 判断是否需要补充搜索 → 执行 → 评估
 
 import os
 from datetime import datetime
+import asyncio
 from typing import List, Dict, Any
 
 from langgraph.graph import StateGraph, END
@@ -110,15 +111,22 @@ def fetch_rss_node(state: FeedLensState) -> dict:
         return {"collected_items": [], "error": f"fetch_rss failed: {e}"}
 
 
-async def search_web_node(state: FeedLensState) -> dict:
-    """条件触发：collected_items < 5 时补充 MCP search_web 搜索。"""
+def search_web_node(state: FeedLensState) -> dict:
+    """条件触发：collected_items < 5 时补充 MCP search_web 搜索。
+
+    同步实现：通过 asyncio.run 驱动异步 MCP 客户端，
+    以兼容同步编译的 LangGraph StateGraph（避免在 sync .invoke() 中返回协程）。
+    """
     query = _get_search_query(state)
     print(f"[search_web] 补充搜索: {query}", flush=True)
 
-    try:
+    async def _do_search():
         client = SearchMCPClient(base_url="http://127.0.0.1:8100")
         async with client:
-            search_results = await client.search(query, max_results=5)
+            return await client.search(query, max_results=5)
+
+    try:
+        search_results = asyncio.run(_do_search())
 
         # 将 MCP 搜索结果转换为统一格式
         converted = []
@@ -146,7 +154,6 @@ async def search_web_node(state: FeedLensState) -> dict:
             "search_supplemented": False,
             "error": f"search_web failed: {e}",
         }
-
 
 def enrich_metadata_node(state: FeedLensState) -> dict:
     """LLM 提取 category / keywords / importance。"""
@@ -230,4 +237,3 @@ def build_collection_agent():
     workflow.add_edge("normalize_items", END)
 
     return workflow.compile()
-

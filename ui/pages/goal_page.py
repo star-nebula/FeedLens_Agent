@@ -21,9 +21,11 @@ def _get_db() -> Database:
 def _get_llm() -> DeepSeekProvider:
     """获取 LLM 实例。"""
     config = load_config()
+    deepseek_cfg = config.get("llm", {}).get("deepseek", {})
     return DeepSeekProvider(
-        api_key=config.get("llm", {}).get("deepseek", {}).get("api_key", ""),
-        model=config.get("deepseek_model", "deepseek-chat"),
+        api_key=deepseek_cfg.get("api_key", ""),
+        base_url=deepseek_cfg.get("base_url", "https://api.deepseek.com/v1"),
+        model=deepseek_cfg.get("model", "deepseek-chat"),
     )
 
 
@@ -47,7 +49,10 @@ Goal 文本:
 
     try:
         response = llm.chat([{"role": "user", "content": prompt}])
-        content = response.get("content", "") if isinstance(response, dict) else str(response)
+        if isinstance(response, dict):
+            content = response.get("content", "")
+        else:
+            content = str(response)
         # 提取 JSON
         import re
         json_match = re.search(r"\{.*\}", content, re.DOTALL)
@@ -119,6 +124,62 @@ def render():
             st.caption(f"更新时间: {current_goal['updated_at']}")
 
     st.markdown("---")
+
+    # 设置 / 更新 Goal
+    st.markdown("### ✍️ 设置新 Goal")
+    st.markdown("输入您长期关注的目标，系统将用 LLM 自动提取主题、关键词并推荐 RSS 来源。")
+    goal_input = st.text_area("Goal 文本", value="", height=120, key="goal_input", help="例如：AI Agent 技术进展 / 新能源车行业动态")
+
+    col_extract, col_save = st.columns(2)
+    extracted = None
+    with col_extract:
+        if st.button("🧠 LLM 提取结构化字段", key="extract_goal", use_container_width=True):
+            if not goal_input.strip():
+                st.warning("请先输入 Goal 文本")
+            else:
+                with st.spinner("LLM 提取中..."):
+                    extracted = _extract_goal_fields(goal_input)
+                if not extracted:
+                    st.error("提取失败，请检查 LLM 配置或重试")
+                else:
+                    st.session_state["extracted_goal"] = extracted
+
+    # 展示提取结果（跨按钮交互保留）
+    if "extracted_goal" in st.session_state:
+        extracted = st.session_state["extracted_goal"]
+        with st.expander("🔍 提取的结构化字段", expanded=True):
+            topics = extracted.get("topics", [])
+            keywords = extracted.get("keywords", [])
+            preferred_sources = extracted.get("preferred_sources", [])
+            st.markdown(f"**主题:** {', '.join(topics) if topics else '（无）'}")
+            st.markdown(f"**关键词:** {', '.join(keywords) if keywords else '（无）'}")
+            if preferred_sources:
+                st.markdown(f"**推荐 RSS 来源:** {', '.join(preferred_sources)}")
+                st.caption("可在「RSS 源管理」页面添加这些来源")
+            else:
+                st.caption("未推荐具体来源")
+
+    with col_save:
+        if st.button("💾 保存 Goal", key="save_goal", use_container_width=True, type="primary"):
+            if not goal_input.strip():
+                st.warning("请先输入 Goal 文本")
+            else:
+                fields = extracted if extracted else _extract_goal_fields(goal_input)
+                if not fields:
+                    fields = {"topics": [], "keywords": [], "preferred_sources": []}
+                try:
+                    _save_goal(
+                        goal_text=goal_input.strip(),
+                        topics=fields.get("topics", []),
+                        keywords=fields.get("keywords", []),
+                        preferred_sources=fields.get("preferred_sources", []),
+                    )
+                    st.success("✅ Goal 已保存")
+                    st.session_state.pop("extracted_goal", None)
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"保存失败: {e}")
+
 
     # 立即可运行
     st.markdown("### 🚀 运行管线")

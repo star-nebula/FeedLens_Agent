@@ -1,4 +1,4 @@
-﻿# FeedLens MVP 开发 TODO 清单
+# FeedLens MVP 开发 TODO 清单
 
 ## 阶段一：项目骨架 + 数据模型 ✅
 
@@ -221,3 +221,81 @@
 - [x] 实现 `generate_briefing` 接口 `style` 参数
 - [x] 支持 concise / detailed / bullet 风格
 
+***
+
+## 2026-06-20 — MVP 达标度审计 + 修复（第二轮）
+
+**审计结论**：项目约 85-90% 达到 MVP 设计要求，核心能力（planner 自主编排、ReAct、多因子排序、反馈闭环、定时推送）均已落地。下列 P0/P1/P2 缺口已修复。
+
+### 已修复（本批次）
+
+**P0**
+- [x] **偏好因子改用真实余弦**：
+anking_agent.py warm 路径现用 cosine(item_emb, v_like) - cosine(item_emb, v_dislike) 归一化参与排序，并从 ChromaDB user_preference 集合读取 user_{id}_like/dislike 向量（新增 _load_preference_vectors / _cosine 辅助）。冷启动或偏好未就绪时降级为 similarity 代理。
+- [x] **coordinator_reflect 读错 key**：main_agent.py 由 obs.get("brief_quality") 改为 obs.get("briefing_quality", state.get("brief_quality", 0.0))，消除恒为 0.0 的假「简报质量过低」告警。
+- [x] **async 节点跑在 sync graph**：collection_agent.py 的 search_web_node 改为同步函数，内部用 syncio.run() 驱动异步 MCP 客户端，避免在 sync .invoke() 中返回协程。
+- [x] **错误隔离接入**：main_agent.py invoke_sub_agent_node 改用 utils.error_isolation.run_with_isolation 包装每个子 Agent 调度，单个失败不阻断本轮其余子 Agent。
+
+**P1**
+- [x] **Goal 页 LLM 提取接线**：ui/pages/goal_page.py 新增 Goal 输入框 + 「LLM 提取结构化字段」按钮 + 提取结果展示（主题/关键词/推荐 RSS 来源）+「保存 Goal」按钮；修复 _get_llm 错读 config key、_extract_goal_fields 对 str 调 .get() 两个 Bug。
+- [x] **is_breaking_news 时区 Bug**：scheduler/push_scheduler.py 统一把带时区 pub_time 转本地 naive datetime 再与 datetime.now() 相减，消除 aware-naive TypeError 导致破例推送静默失效。
+- [x] **排序/去重参数改 config 驱动**：
+anking_agent.py 权重、冷启动阈值、source_diversity_bonus、feedback_bias 三档、去重  .88/0.70/20 阈值均改为从 config.yaml 读取（新增 _load_ranking_config），不再硬编码。
+
+**P2**
+- [x] **FeedLensState 补 eedback_count** 字段（设计要求但原缺失）。
+
+### 验证
+
+- 6 个改动文件语法 + import 全部 OK。
+- 	est_feedback_agent.py 8/8、	est_ranking_agent.py 8/8（含真实 Embedding+ChromaDB 偏好余弦链路）。
+- 	est_main_agent.py 7/19 → 9/19（coordinator_reflect 审查通过测试因 P0-2 修复转 PASS）。
+- 	est_integration.py 端到端管线（ReAct→planner→coordinator_reflect→去重校准）通过。
+- 未引入回归；剩余 main_agent/integration 失败为**既存测试 mock 不匹配**（测试 patch gents.*._load_config 但模块从未定义该属性，仅从 utils.config 导入 load_config），与本次修复无关。
+
+### 尚未处理（既存问题，非本次范围）
+
+- [ ] Dashboard 页（dashboard_page.py）未注册到 pp.py、无 
+ender()、内容是 P1 指标仪表盘而非设计的「简报阅读 + 三级反馈」页。
+- [ ] dedup_hard_threshold: 0.80 未作为真门限实现（超 20 对上限后无脑合并）。
+- [ ] EMA 操作数语义（α·current + (1-α)·feedback vs 设计字面 α·current + (1-α)·old）需确认意图。
+- [ ] 既存测试 mock 不匹配（_load_config 属性、collected_count/suggested_action 键、planner 动态计划）需修测试以反映真实 API。
+- [ ] eedback_agent._update_keyword_preference 的 'feedback_count' dict 访问告警（既存，非阻塞）。
+- [ ] 多个源文件 docstring GBK/UTF-8 mojibake（仅影响可读性）。
+- [ ] SQLite 表名与设计不一致（goals→users、user_preference→user_preferences、eed_items 拆分），功能等价但命名偏差。
+
+### 记忆库说明
+
+本次尝试按 AGENTS.md 写入 Obsidian 记忆库 E:/BaiduSyncdisk/obsidian/AgentLog，但该路径多次访问超时（疑似 BaiduSyncdisk 同步占用），改记于项目内 docs/TODO.md。
+
+
+***
+
+## 2026-06-20 — 简报字段修复（时间留空 + 来源单一）
+
+**问题**：简报中每条内容来源都是 BBC、时间字段留空。
+
+### 根因
+- **时间留空**：`briefing_agent._build_briefing_prompt` 喂给 LLM 的条目文本里没有 `published_at` 字段，LLM 无法填充；且 `generate_briefing_node` 解析 LLM JSON 后不回填原始结构化字段。
+- **来源全 BBC**：`sources` 表 7 个源中 6 个走 `rsshub.app`（当前网络不可达），只有 BBC 能采集；且 source 字段不回填校验，LLM 可能改写丢失来源多样性。
+
+### 已修复（三步）
+
+**方案 A — prompt 补时间**
+- [x] `agents/briefing_agent.py` `_build_briefing_prompt` 每条条目新增 `时间: {published_at}` 字段喂给 LLM。
+
+**方案 B — 回填结构化字段**
+- [x] 新增 `_build_item_index` / `_backfill_briefing_items`；`generate_briefing_node` 解析 LLM JSON 后按 id 用原始 `ranked_items` 回填 `published_at/source/url/importance/category`，原始缺失时给默认值（`未知时间`/`unknown`/`3`）。
+
+**第①步 — source/url 强制以原始为准**
+- [x] `_backfill_briefing_items` 把 `source`/`url` 从「文本类保留 LLM」改为「客观事实字段强制覆盖」，杜绝 LLM 把多源改写成单一来源。
+
+**第②步 — sources 表换可达源**
+- [x] `data/feedlens.db` sources 表从 7 个（6 个走不可达 rsshub.app）换成 5 个可达源：36氪 `https://36kr.com/feed`、少数派 `https://sspai.com/feed`、阮一峰周刊 `https://www.ruanyifeng.com/blog/atom.xml`、Solidot `https://www.solidot.org/index.rss`、BBC（备用）。已备份 `data/feedlens.db.bak.sources`。采集验证：国内 4 源拿到 63 条、来自 4 个不同源、published_at 均有真实时间。
+
+**第③步 — known_names 映射更新**
+- [x] `tools/fc_tools.py` `_extract_source_name` 的 `known_names` 新增 4 个新源映射，source 字段显示中文名（36氪/少数派/阮一峰周刊/Solidot）而非域名；保留旧 rsshub 映射以便历史数据回显。
+
+### 验证
+- 语法/import 全 OK；回填单测通过（LLM 改写来源被纠正回真实来源、空时间被回填）；`test_briefing_agent.py` 12/12 无回归；端到端串联（采集→normalize→回填）多来源 + 中文 source 名 + 时间回填全部正常。
+- 注意：网络可达性会波动（BBC 本次反而超时），多源是关键，不依赖单一源。
