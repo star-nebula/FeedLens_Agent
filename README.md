@@ -54,7 +54,7 @@ python scripts/init_db.py
 # 启动 Streamlit 前端（含 APScheduler 后台定时任务）
 streamlit run app.py
 
-# 如需测试 MCP 搜索服务（单独启动）
+# 如需 MCP 搜索服务（单独启动）
 python -m mcp_servers.search_server
 ```
 

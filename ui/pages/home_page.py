@@ -5,11 +5,41 @@
 import streamlit as st
 import subprocess
 import sys
-import sqlite3
+import os
 import json
+import threading
 from datetime import datetime, timezone, timedelta
 from models.database import Database
 from utils.pipeline_runner import run_agent_pipeline
+
+
+def _run_pipeline_with_tee(trigger: str = "manual"):
+    """启动 pipeline 子进程，输出同时写入日志文件和终端。"""
+    log_path = "data/pipeline.log"
+    log_file = open(log_path, "a", encoding="utf-8")
+
+    env = os.environ.copy()
+    env["PYTHONUTF8"] = "1"
+    proc = subprocess.Popen(
+        [sys.executable, "-m", "utils.pipeline_runner", "--trigger", trigger],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        env=env,
+        creationflags=subprocess.DETACHED_PROCESS,
+    )
+
+    def _reader():
+        for line in iter(proc.stdout.readline, b""):
+            text = line.decode("utf-8", errors="replace")
+            log_file.write(text)
+            log_file.flush()
+            sys.stderr.buffer.write(line)
+            sys.stderr.buffer.flush()
+        proc.stdout.close()
+        log_file.close()
+
+    threading.Thread(target=_reader, daemon=True).start()
+    return proc
 
 
 def _get_db() -> Database:
@@ -72,14 +102,8 @@ def render():
             st.rerun()
     with col3:
         if st.button("🚀 立即运行", type="primary", key="run_header", use_container_width=True):
-            import os
-            log_path = "data/pipeline.log"
             try:
-                proc = subprocess.Popen(
-                    [sys.executable, "-m", "utils.pipeline_runner", "--trigger", "manual"],
-                    stdout=open(log_path, "a"), stderr=subprocess.STDOUT,
-                    creationflags=subprocess.DETACHED_PROCESS,
-                )
+                _run_pipeline_with_tee("manual")
                 st.success("🚀 管线已后台启动，完成后刷新页面查看简报")
                 st.toast("⏳ 管线运行中（约 1-3 分钟）")
             except Exception as e:
@@ -96,11 +120,7 @@ def render():
         col_a, col_b = st.columns([1, 3])
         with col_a:
             if st.button("🚀 立即运行", type="primary", key="run_empty", use_container_width=True):
-                subprocess.Popen(
-                    [sys.executable, "-m", "utils.pipeline_runner", "--trigger", "manual"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-                    creationflags=subprocess.DETACHED_PROCESS,
-                )
+                _run_pipeline_with_tee("manual")
                 st.success("🚀 管线已后台启动，完成后刷新页面查看简报")
         with col_b:
             st.markdown("👉 前往 **Goal 设置** 页面配置您的信息需求。")
