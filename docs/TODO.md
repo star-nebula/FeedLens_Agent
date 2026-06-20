@@ -333,3 +333,27 @@ ender()、内容是 P1 指标仪表盘而非设计的「简报阅读 + 三级反
 
 ### 备注
 - 来源分布仍会随 LLM 的 importance 评分波动，分类统一已大幅改善；若需更强来源多样性保证，可在 `generate_briefing_node` 取 top-N 时加「同来源最多占 N 条」的去重策略（P1 可选优化，未做）。
+
+
+***
+
+## 2026-06-20 — importance 显示格式 + planner 自主扩容策略
+
+### importance 显示格式
+- **问题**：简报显示 `重要性: 0.8/5`，importance 实际是 0-1 小数却套了 /5 分母。
+- **修复**：`agents/briefing_agent.py` 新增 `_format_importance`，把 0-1 换算成 1-5 整数显示（0.8→4/5），渲染处和 prompt 输入处都调用。兼容 0-1 与 1-5 两种输入范围。
+
+### planner 自主扩容策略（简报条目不足时）
+- **需求**：简报不足 10 条时，让 agent 自主规划，把已采集但分数不够高的条目也纳入简报（而非重新采集）。
+- **实现**（4 处改动，复用现有 ReAct 循环）：
+  1. `agents/main_agent.py` `observe_results_node` 增加简报条目数判断：`len(ranked)<10` 时标记 issues + `suggested_action`。区分两种情况——采集足够但排序后少→`expand_threshold`；采集本身就少→`search_expand`。
+  2. `agents/main_agent.py` `PLANNER_SYSTEM_PROMPT` 增加扩容策略：简报条目<10且采集足够→调 Ranking 设 `expand_threshold=true` 放宽门槛（不重新采集）；params 可选值补充 `expand_threshold`。
+  3. `agents/main_agent.py` `invoke_sub_agent_node` 把 plan 的 `params` 注入 `current_state`，让子 Agent 能读到 `expand_threshold`。
+  4. `agents/ranking_agent.py` `rank_items_node` 响应 `expand_threshold`：预筛窗口 7天→14天，截断上限 10→20，纳入稍旧/分数较低的已采集条目。
+- **验证**：
+  - observe 单测三场景通过（采集15/排序5→expand_threshold；采集2/排序2→search_expand；正常→不重试）。
+  - rank_items 单测通过（默认丢弃8天前旧闻+上限10；expand 保留8天前+上限20）。
+  - 端到端真实 LLM 验证：observe 检测「简报条目不足5/10」→ planner 自主返回 `{"agent":"Ranking","params":{"expand_threshold":true}}`，理由「采集已足够，无需重新采集，放宽排序门槛」。
+  - test_main_agent 9/19（无回归）、test_ranking_agent 8/8、test_briefing_agent 12/12。
+- **防无限循环**：靠现有 `max_react_cycles=3` 硬上限兜底。
+- **效果**：强化了项目核心卖点「planner 自主规划」——planner 不只会重试采集，还会自主调整排序策略。

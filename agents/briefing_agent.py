@@ -116,7 +116,7 @@ def _build_briefing_prompt(
                 f"  摘要: {item.get('summary', '')[:100]}\n"
                 f"  来源: {item.get('source', 'unknown')} | "
                 f"  时间: {item.get('published_at', '')} | "
-                f"重要性: {item.get('importance', 3)}/5"
+                f"重要性: {_format_importance(item.get('importance', 0.5))}"
             )
         if len(cat_items) > 5:
             items_text.append(f"  还有 {len(cat_items) - 5} 篇类似报道...")
@@ -233,6 +233,28 @@ def _format_datetime(iso_str: str) -> str:
         return s
 
 
+def _format_importance(raw) -> str:
+    """把 importance 数值格式化为 "X/5" 的可读评分（1-5 整数）。
+
+    兼容两种输入范围：
+    - 0-1 小数（enrich_metadata 当前产出）: 0.8 -> "4/5"
+    - 1-5 整数（设计文档原始定义）: 4 -> "4/5"
+    无法解析时返回默认 "3/5"。
+    """
+    try:
+        val = float(raw)
+    except (TypeError, ValueError):
+        return "3/5"
+    # 0-1 区间换算到 1-5；>1 视为已是 1-5 评分
+    if val <= 1.0:
+        score = round(val * 5)
+    else:
+        score = round(val)
+    # clamp 到 [1, 5]
+    score = max(1, min(5, int(score)))
+    return f"{score}/5"
+
+
 def _render_markdown(briefing: Dict[str, Any]) -> str:
     """将简报 JSON 渲染为 Markdown。"""
     lines = [f"# {briefing.get('title', '简报')}", ""]
@@ -256,10 +278,14 @@ def _render_markdown(briefing: Dict[str, Any]) -> str:
         lines.append("")
         lines.append(f"**摘要**: {main_item.get('summary', '')}")
         lines.append("")
+        url = main_item.get("url", "")
+        if url:
+            lines.append(f"**链接**: {url}")
+            lines.append("")
         lines.append(
             f"- 来源: {main_item.get('source', 'unknown')} | "
             f"时间: {_format_datetime(main_item.get('published_at', ''))} | "
-            f"重要性: {main_item.get('importance', 3)}/5"
+            f"重要性: {_format_importance(main_item.get('importance', 0.5))}"
         )
         lines.append("")
 

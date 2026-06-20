@@ -69,6 +69,8 @@ PLANNER_SYSTEM_PROMPT = """你是 FeedLens 的编排 Planner。根据当前 Agen
 
 - 采集条数 < 3 且未补充搜索 → 对 goal 关键词执行 search_expand
 - 排序 top_score < 0.3 → 考虑 rerank 或跳过
+- 简报条目 < 10 且采集已足够(>=10条) → expand_threshold：放宽排序门槛，把分数较低但已采集的条目纳入简报（不重新采集，调 Ranking 并在 params 设 expand_threshold=true）
+- 简报条目 < 10 且采集也不足 → 先 search_expand 补充采集，再 Ranking
 - 简报质量 < 0.7 → retry_briefing 或 skip
 - react_cycle >= 2 → 优先收敛，跳过非必须步骤
 - top_score > 0.85 且重要性高 → 标记 push_immediate
@@ -83,7 +85,8 @@ PLANNER_SYSTEM_PROMPT = """你是 FeedLens 的编排 Planner。根据当前 Agen
   "push_immediate": false
 }
 
-params 可选值：search_expand(含 query), retry, rerank 等。空对象表示标准执行。"""
+params 可选值：search_expand(含 query), retry, rerank, expand_threshold 等。空对象表示标准执行。
+注意：expand_threshold 仅对 Ranking 有效，表示放宽排序截断门槛，把更多已采集条目纳入简报。"""
 
 
 # ============================================================
@@ -312,6 +315,9 @@ def invoke_sub_agent_node(state: FeedLensState) -> dict:
             continue
 
         result_key = {"Collection": "collection_result", "Ranking": "ranking_result", "Briefing": "briefing_result"}[agent_name]
+        # 把 plan 的 params 注入当前 state，让子 Agent 能读到 expand_threshold / search_expand 等
+        if isinstance(params, dict) and params:
+            current_state = {**current_state, **params}
         result = run_with_isolation(
             f"sub_agent_{agent_name}",
             lambda b=builder, cs=current_state: b().invoke(cs),
@@ -360,16 +366,34 @@ def observe_results_node(state: FeedLensState) -> dict:
     collection_ok = len(collected) >= 3
     ranking_ok = bool(ranked and ranking_detail.get("top_score", 0) >= 0.3)
     briefing_ok = brief_quality >= 0.7
-    needs_retry = not (collection_ok and ranking_ok and briefing_ok)
+
+    # 简报条目数判断：期望 10 条，不足时建议扩容
+    # 区分两种情况：
+    #   - 采集足够(len(collected)>=10) 但排序后少 → 门槛砍多了，建议 expand_threshold
+    #   - 采集本身就少 → 建议补充采集（search_expand），由 planner 决策
+    expected_brief_items = 10
+    briefing_count_ok = len(ranked) >= expected_brief_items
+    suggest_expand = (not briefing_count_ok) and (len(collected) >= expected_brief_items)
+
+    needs_retry = not (collection_ok and ranking_ok and briefing_ok and briefing_count_ok)
 
     issues = []
+    suggested_action = None
     if not collection_ok:
         issues.append(f"采集不足: {len(collected)} 条 < 3")
+        suggested_action = "search_expand"
     if not ranking_ok:
         top_score = ranking_detail.get("top_score", 0)
         issues.append(f"排序不佳: top_score={top_score:.2f} < 0.3")
     if not briefing_ok:
         issues.append(f"简报质量低: score={brief_quality:.2f} < 0.7")
+    if not briefing_count_ok:
+        issues.append(f"简报条目不足: {len(ranked)}/{expected_brief_items}")
+        if suggest_expand:
+            # 采集已足够但排序后条目少 → 门槛砍多了，建议放宽排序门槛
+            suggested_action = "expand_threshold"
+        elif suggested_action is None:
+            suggested_action = "search_expand"
 
     observation = {
         "collection_ok": collection_ok,
@@ -378,6 +402,9 @@ def observe_results_node(state: FeedLensState) -> dict:
         "ranking_top_score": ranking_detail.get("top_score", 0.0),
         "briefing_ok": briefing_ok,
         "briefing_quality": brief_quality,
+        "briefing_count": len(ranked),
+        "briefing_count_ok": briefing_count_ok,
+        "suggested_action": suggested_action,
         "react_cycle": state.get("react_cycle_count", 0),
         "needs_retry": needs_retry,
         "issues": issues,

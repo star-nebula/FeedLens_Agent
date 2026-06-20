@@ -301,7 +301,10 @@ def rank_items_node(state: FeedLensState) -> dict:
 
     print(f"[rank_items] 开始排序: {len(items)} 条", flush=True)
 
-    # ---- 0. 时间衰减预筛（Δt > 7 天直接丢弃）----
+    # ---- 0. 时间衰减预筛（Δt > N 天直接丢弃）----
+    # expand_threshold 时放宽预筛窗口：7 天 -> 14 天，纳入稍旧但相关的条目
+    expand_threshold = bool(state.get("expand_threshold", False))
+    prefilter_hours = 336 if expand_threshold else 168  # 14天 / 7天
     now = datetime.now()
     filtered_items = []
     for item in items:
@@ -310,14 +313,15 @@ def rank_items_node(state: FeedLensState) -> dict:
             try:
                 pub_time = datetime.fromisoformat(published_at.replace("Z", "+00:00"))
                 hours_diff = (now - pub_time.replace(tzinfo=None)).total_seconds() / 3600
-                if hours_diff > 168:
+                if hours_diff > prefilter_hours:
                     continue
             except Exception:
                 pass
         filtered_items.append(item)
 
     pre_drop = len(items) - len(filtered_items)
-    print(f"[rank_items] 预筛: {len(items)} -> {len(filtered_items)} 条 (丢弃 > 7 天: {pre_drop} 条)", flush=True)
+    pre_label = "14 天" if expand_threshold else "7 天"
+    print(f"[rank_items] 预筛({pre_label}): {len(items)} -> {len(filtered_items)} 条 (丢弃: {pre_drop} 条)", flush=True)
 
     if not filtered_items:
         return {"ranked_items": [], "ranking_detail": {"total_items": 0, "prescreened_dropped": pre_drop}}
@@ -424,8 +428,9 @@ def rank_items_node(state: FeedLensState) -> dict:
         })
 
     # ---- 4. 降序 + 上限 ----
-    scored_items.sort(key=lambda x: x["_score"], reverse=True)
-    max_items = state.get("max_briefing_items", 10)
+    # expand_threshold 时放宽截断上限：10 -> 20，让更多已采集条目进入简报
+    default_max = 20 if expand_threshold else 10
+    max_items = state.get("max_briefing_items", default_max)
     ranked_items = scored_items[:max_items]
 
     # ---- 5. ranking_detail ----
