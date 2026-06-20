@@ -299,3 +299,37 @@ ender()、内容是 P1 指标仪表盘而非设计的「简报阅读 + 三级反
 ### 验证
 - 语法/import 全 OK；回填单测通过（LLM 改写来源被纠正回真实来源、空时间被回填）；`test_briefing_agent.py` 12/12 无回归；端到端串联（采集→normalize→回填）多来源 + 中文 source 名 + 时间回填全部正常。
 - 注意：网络可达性会波动（BBC 本次反而超时），多源是关键，不依赖单一源。
+
+
+***
+
+## 2026-06-20 — 简报时间格式 + 来源多样性（分类语言统一）
+
+### 问题
+1. **时间格式**：简报显示 `生成时间: 2026-06-20T08:00:00Z`，`T` 和 `Z` 是 ISO-8601 标记，希望显示为 `2026-06-20 08:00:00`。
+2. **来源单一**：简报只有 36氪一个来源（采集实际有 5 个源 84 条，来源分布正常）。
+
+### 根因
+- **时间格式**：`_render_markdown` 直接输出原始 `published_at` 字符串，无格式化。
+- **来源单一**：`enrich_metadata` 的 prompt 要求 LLM 从**英文**列表 `[technology, business, ...]` 选 category，而简报 `DEFAULT_CATEGORIES = ["科技","商业","社会","其他"]` 是**中文**。`_group_by_category` 里 `if item_cat not in categories: item_cat = "其他"` 导致所有英文 category 匹配不上、74 条几乎全部归到「其他」一类。再叠加「取 top-N + 每类只选 1 条主条目」，简报退化为单类单来源，来源分布随 LLM 的 importance 评分波动（某次 36氪分高就全是 36氪）。
+
+### 已修复
+
+**时间格式化**
+- [x] `agents/briefing_agent.py` 新增 `_format_datetime` 辅助函数，把 ISO 字符串（`...T...Z` / `...+08:00` / `YYYY-MM-DD HH:MM:SS`）统一格式化为 `YYYY-MM-DD HH:MM:SS`；`_render_markdown` 渲染时间时调用它。
+
+**分类语言统一（方案 1）**
+- [x] `tools/fc_tools.py` `build_enrich_prompt` 的 category 列表从英文 `[technology, business, science, entertainment, sports, politics, other]` 改为中文 `[科技, 商业, 社会, 娱乐, 体育, 政治, 其他]`，与 `DEFAULT_CATEGORIES` 对齐。
+- [x] 4 处 category 兜底 `"other"` 改为 `"其他"`（enrich_metadata 异常分支、parse_enrich_response 默认返回、normalize_items 默认值）。
+
+### 验证
+- 语法 OK；`_format_datetime` 单测全通过（`2026-06-20T08:00:00Z`→`2026-06-20 08:00:00`，兼容带时区/无时区/空值）。
+- 真实 LLM 验证：enrich 后 category 全部为中文，20 条样本正确分类 16/20、归到「其他」0/20，条目被正确分到「科技/社会/娱乐」等多个中文类。
+- `test_briefing_agent.py` 12/12 无回归。
+
+### 效果
+- 时间显示为 `2026-06-20 08:00:00`，无 T/Z。
+- 条目不再全堆「其他」一类，分散到多个中文类别；简报按 category 分组、每类选主条目后自然呈现多分类多来源，而非单类单来源。
+
+### 备注
+- 来源分布仍会随 LLM 的 importance 评分波动，分类统一已大幅改善；若需更强来源多样性保证，可在 `generate_briefing_node` 取 top-N 时加「同来源最多占 N 条」的去重策略（P1 可选优化，未做）。

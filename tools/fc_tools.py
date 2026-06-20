@@ -190,13 +190,13 @@ def enrich_metadata(
                     item["keywords"] = results[j]["keywords"]
                     item["importance"] = results[j]["importance"]
                 else:
-                    item["category"] = "other"
+                    item["category"] = "其他"
                     item["keywords"] = ""
                     item["importance"] = 0.5
                 enriched_items.append(item)
         except Exception as e:
             for item in batch:
-                item["category"] = "other"
+                item["category"] = "其他"
                 item["keywords"] = ""
                 item["importance"] = 0.5
                 item["enrich_error"] = str(e)
@@ -215,7 +215,7 @@ def build_enrich_prompt(items: List[Dict]) -> str:
     prompt = f"""请分析以下新闻条目，提取元数据。
 
 要求：
-1. category: 从 [technology, business, science, entertainment, sports, politics, other] 中选择一个
+1. category: 从 [科技, 商业, 社会, 娱乐, 体育, 政治, 其他] 中选择一个（必须用中文）
 2. keywords: 提取3-5个关键词，逗号分隔
 3. importance: 0-1 的重要性评分（影响大的事件评分高）
 
@@ -246,7 +246,7 @@ def parse_enrich_response(response: str, expected_count: int) -> List[Dict]:
     except Exception:
         pass
 
-    return [{"category": "other", "keywords": "", "importance": 0.5}] * expected_count
+    return [{"category": "其他", "keywords": "", "importance": 0.5}] * expected_count
 
 
 # ====================
@@ -306,7 +306,7 @@ def normalize_items(items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
             "url": item.get("url", "").strip(),
             "published_at": item.get("published_at", ""),
             "fetched_at": item.get("fetched_at", ""),
-            "category": item.get("category", "other"),
+            "category": item.get("category", "其他"),
             "keywords": item.get("keywords", ""),
             "importance": float(item.get("importance", 0.5)),
             "embedding": item.get("embedding", None),

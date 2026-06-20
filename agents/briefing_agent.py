@@ -7,6 +7,7 @@
 import json
 import re
 import os
+from datetime import datetime
 from typing import List, Dict, Any
 from langgraph.graph import StateGraph, END
 from utils.config import load_config
@@ -214,6 +215,24 @@ def _parse_json_response(text: str) -> Dict[str, Any]:
         return {"error": f"JSON 解析失败: {text[:200]}"}
 
 
+def _format_datetime(iso_str: str) -> str:
+    """把 ISO-8601 时间字符串格式化为 "YYYY-MM-DD HH:MM:SS"。
+
+    兼容 "2026-06-20T08:00:00Z" / "2026-06-20T08:00:00+08:00" / "2026-06-20 08:00:00" 等。
+    解析失败或空值时原样返回（或返回占位）。"""
+    if not iso_str:
+        return ""
+    s = iso_str.strip()
+    try:
+        # 统一处理 Z 后缀（UTC）
+        normalized = s.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(normalized)
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
+    except Exception:
+        # 已经是 "YYYY-MM-DD HH:MM:SS" 或无法解析，原样返回
+        return s
+
+
 def _render_markdown(briefing: Dict[str, Any]) -> str:
     """将简报 JSON 渲染为 Markdown。"""
     lines = [f"# {briefing.get('title', '简报')}", ""]
@@ -239,7 +258,7 @@ def _render_markdown(briefing: Dict[str, Any]) -> str:
         lines.append("")
         lines.append(
             f"- 来源: {main_item.get('source', 'unknown')} | "
-            f"时间: {main_item.get('published_at', '')} | "
+            f"时间: {_format_datetime(main_item.get('published_at', ''))} | "
             f"重要性: {main_item.get('importance', 3)}/5"
         )
         lines.append("")
@@ -582,6 +601,5 @@ def build_briefing_agent() -> StateGraph:
     )
 
     return workflow.compile()
-
 
 
