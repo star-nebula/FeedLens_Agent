@@ -44,7 +44,7 @@ class FeedLensState(TypedDict, total=False):
     brief_quality: float                     # brief_quality_check 综合评分
 
     # ---- 观察与审查 ----
-    observation_result: dict[str, Any]       # observe_results 输出: {quality_summary, needs_retry, suggested_action}
+    observation_result: dict[str, Any]       # observe_results 输出: {collection_ok, ranking_ok, briefing_ok, needs_retry, issues}
     coordinator_observation: dict[str, Any]  # coordinator_reflect 综合审查结果
 
     # ---- 推送 ----

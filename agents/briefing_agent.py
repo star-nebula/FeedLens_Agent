@@ -212,16 +212,65 @@ def _render_markdown(briefing: Dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def _check_contradiction(item1: Dict, item2: Dict) -> bool:
-    """P1: 增强矛盾检测。
-    
-    检测规则：
-    1. 时间矛盾：发布时间差 > 7 天
-    2. 重要性矛盾：重要性差 > 3
-    3. 类别矛盾：同标题跨类别出现
-    4. 来源重复：同 URL 多次出现
+def _llm_assess_quality(
+    items: list[dict],
+    goal_text: str,
+    llm: DeepSeekProvider,
+) -> tuple[list[float], list[dict]]:
+    """调用 LLM 一次性完成 relevance 评分 + 矛盾检测。
+
+    Returns:
+        (relevance_scores, contradictions)
+        - relevance_scores: 与 items 等长的 0-1 分数列表
+        - contradictions: [{item_a: str, item_b: str, reason: str}] 或空列表
     """
-    # 1. 时间矛盾
+    items_text = "\n".join(
+        f"[{i}] {item.get('title', '')} | {item.get('summary', '')[:300]}"
+        for i, item in enumerate(items)
+    )
+    prompt = f"""评估以下新闻简报的质量，请返回 JSON：
+
+## 用户目标
+{goal_text}
+
+## 简报条目
+{items_text}
+
+## 评估要求
+1. relevance: 每条条目与用户目标的相关性评分（0-1），返回数组
+2. contradictions: 是否有条目之间存在事实矛盾（对同一事件的陈述互相冲突），返回冲突对列表
+
+返回格式：
+{{"relevance": [0.8, 0.6, ...], "contradictions": [{{"a": 0, "b": 1, "reason": "..."}}]}}
+
+直接输出 JSON，不加代码块标记。"""
+
+    try:
+        response = llm.chat([{"role": "user", "content": prompt}])
+        text = response if isinstance(response, str) else response.get("content", "{}")
+        # 提取 JSON
+        import re
+        match = re.search(r'\{[\s\S]*\}', text)
+        if match:
+            result = json.loads(match.group())
+        else:
+            result = json.loads(text)
+
+        relevance_scores = result.get("relevance", [0.5] * len(items))
+        contradictions = [
+            {"item_a": items[c["a"]].get("id", ""), "item_b": items[c["b"]].get("id", ""), "reason": c.get("reason", "")}
+            for c in result.get("contradictions", [])
+            if isinstance(c, dict) and c.get("a", -1) < len(items) and c.get("b", -1) < len(items)
+        ]
+        return relevance_scores, contradictions
+    except Exception as e:
+        print(f"[llm_quality] 失败: {e}，使用默认评分", flush=True)
+        return [0.5] * len(items), []
+
+
+def _check_contradiction(item1: Dict, item2: Dict) -> bool:
+    """矛盾检测：时间矛盾 + 重要性差异 + URL 重复（不含字符级标题比较）。
+    """
     t1 = item1.get("published_at", "")
     t2 = item2.get("published_at", "")
     if t1 and t2:
@@ -234,27 +283,14 @@ def _check_contradiction(item1: Dict, item2: Dict) -> bool:
                 return True
         except Exception:
             pass
-    # 2. 重要性差异过大
     imp1 = item1.get("importance", 3)
     imp2 = item2.get("importance", 3)
     if abs(imp1 - imp2) > 3:
         return True
-    # 3. P1: 来源重复检测（同 URL）
     url1 = item1.get("url", "")
     url2 = item2.get("url", "")
     if url1 and url2 and url1 == url2:
         return True
-    # 4. P1: 标题相似检测
-    title1 = item1.get("title", "")
-    title2 = item2.get("title", "")
-    if title1 and title2:
-        # 简单相似度：共同词比例
-        words1 = set(title1)
-        words2 = set(title2)
-        if words1 and words2:
-            overlap = len(words1 & words2) / min(len(words1), len(words2))
-            if overlap > 0.8:
-                return True
     return False
 
 
@@ -377,41 +413,39 @@ def brief_quality_check_node(state: FeedLensState) -> dict:
     completeness = min(1.0, total_items_in_brief / max(1, len(ranked_items)))
     quality_detail["completeness"] = completeness
 
-    # 2. relevance 检查（与用户目标的相关性）
-    # 优先使用 structured_goal 中的关键词（LLM 提取），其次回退到简单分词
-    structured_goal = state.get("structured_goal", {})
-    keywords = structured_goal.get("keywords", [])
-    if not keywords and goal_text:
-        keywords = [w for w in re.split(r'[,，\s]+', goal_text) if len(w) >= 2]
-    relevance = 0.5
-    if keywords and categories:
-        matched = 0
-        total = 0
-        for cat in categories:
-            for item in cat.get("items", []):
-                title = item.get("title", "")
-                if any(kw in title for kw in keywords):
-                    matched += 1
-                total += 1
-        if total > 0:
-            relevance = matched / total
-    quality_detail["relevance"] = relevance
-
-    # 3. coherence 检查（矛盾检测）
-    contradictions = []
+    # 2. relevance 检查 — LLM 语义评分，失败时回退 0.5
     all_items = []
     for cat in categories:
-        for item in cat.get("items", []):
-            all_items.append(item)
+        all_items.extend(cat.get("items", []))
 
-    # 两两检查矛盾
+    llm_scores = []
+    llm_contradictions_raw = []
+    relevance = 0.5
+    if all_items and goal_text:
+        try:
+            llm = _get_llm_provider()
+            relevance_scores, llm_contradictions_raw = _llm_assess_quality(all_items, goal_text, llm)
+            if relevance_scores:
+                relevance = sum(relevance_scores) / len(relevance_scores)
+        except Exception as e:
+            print(f"[brief_quality_check] LLM relevance 失败，回退: {e}", flush=True)
+    relevance = min(1.0, max(0.0, relevance))
+    quality_detail["relevance"] = relevance
+
+    # 3. coherence 检查 — 规则矛盾 + LLM 语义矛盾（复用同一次调用结果），合并去重
+    contradictions = []
     for i in range(len(all_items)):
         for j in range(i + 1, len(all_items)):
             if _check_contradiction(all_items[i], all_items[j]):
                 contradictions.append({
                     "item_a": all_items[i].get("id", ""),
                     "item_b": all_items[j].get("id", ""),
+                    "reason": "detected by rule",
                 })
+    for c in llm_contradictions_raw:
+        pair = (c["item_a"], c["item_b"])
+        if not any((p["item_a"], p["item_b"]) == pair or (p["item_b"], p["item_a"]) == pair for p in contradictions):
+            contradictions.append(c)
 
     # 无矛盾得 1.0，有矛盾但不多得 0.7，过多得 0.3
     if len(contradictions) == 0:

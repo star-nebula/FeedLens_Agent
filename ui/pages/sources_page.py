@@ -29,6 +29,18 @@ def _add_source(url: str, name: str, category: str, authority_score: float):
     """添加 RSS 源。"""
     db = _get_db()
     with db.get_connection() as conn:
+        # 检查是否已存在相同 URL
+        existing = conn.execute(
+            "SELECT id, name, is_active FROM sources WHERE url = ?", (url,)
+        ).fetchone()
+        if existing:
+            return {
+                "added": False,
+                "duplicate": True,
+                "existing_id": existing["id"],
+                "existing_name": existing["name"],
+                "existing_active": bool(existing["is_active"]),
+            }
         conn.execute(
             """
             INSERT INTO sources (url, name, category, authority_score)
@@ -36,6 +48,7 @@ def _add_source(url: str, name: str, category: str, authority_score: float):
             """,
             (url, name, category, authority_score),
         )
+    return {"added": True, "duplicate": False}
 
 
 def _update_source(source_id: int, is_active: bool):
@@ -115,12 +128,15 @@ def render():
             if not new_url.strip():
                 st.warning("请输入 RSS URL")
             else:
-                try:
-                    _add_source(new_url, new_name, new_category, new_score)
+                result = _add_source(new_url, new_name, new_category, new_score)
+                if result.get("duplicate"):
+                    st.warning(
+                        f"该 RSS 已存在：**{result['existing_name']}** "
+                        f"（{'已启用' if result['existing_active'] else '已禁用'}）"
+                    )
+                else:
                     st.success("RSS 源已添加！")
                     st.rerun()
-                except Exception as e:
-                    st.error(f"添加失败: {e}")
 
     st.markdown("---")
 

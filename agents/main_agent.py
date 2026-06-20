@@ -52,6 +52,38 @@ def _get_db_path() -> str:
     config = load_config()
     return config.get("data", {}).get("db_path", "data/feedlens.db")
 
+# ============================================================
+# Planner System Prompt（LLM 自主编排）
+# ============================================================
+
+PLANNER_SYSTEM_PROMPT = """你是 FeedLens 的编排 Planner。根据当前 Agent 运行状态，决定下一步该调度哪些子 Agent。
+
+## 可调度的子 Agent
+
+- Collection: 采集 RSS 源 + 补充 MCP 搜索。输入：无；输出：collected_items
+- Ranking:   向量去重 + 多因子偏好排序。输入：collected_items；输出：ranked_items, ranking_detail
+- Briefing:  生成简报 JSON + 质量审查。输入：ranked_items；输出：briefing, brief_quality
+
+## 编排策略参考
+
+- 采集条数 < 3 且未补充搜索 → 对 goal 关键词执行 search_expand
+- 排序 top_score < 0.3 → 考虑 rerank 或跳过
+- 简报质量 < 0.7 → retry_briefing 或 skip
+- react_cycle >= 2 → 优先收敛，跳过非必须步骤
+- top_score > 0.85 且重要性高 → 标记 push_immediate
+- 采集足够但排序已达标 → 可跳过 Collection 直接 Ranking（节约时间/API 成本）
+
+## 输出格式
+
+严格返回 JSON，不加任何解释：
+{
+  "sub_agent_plan": [{"agent": "Collection", "params": {}}, {"agent": "Ranking", "params": {}}],
+  "reason": "一句话中文理由",
+  "push_immediate": false
+}
+
+params 可选值：search_expand(含 query), retry, rerank 等。空对象表示标准执行。"""
+
 
 # ============================================================
 # 节点定义
@@ -148,69 +180,97 @@ def understand_intent_node(state: FeedLensState) -> dict:
 
 
 def planner_node(state: FeedLensState) -> dict:
-    """planner 自主编排子 Agent（ReAct 的 Think 步骤）。
+    """LLM 驱动的自主编排节点（ReAct 的 Think 步骤）。
 
-    7 个决策场景：
-      ① 正常每日简报: Collection → Ranking → Briefing
-      ② 采集不足: Collection → (items<5) → 补充搜索 → Ranking → Briefing
-      ③ 排序不理想: Collection → Ranking → (score<0.3) → 重排 → Briefing
-      ④ 重大事件推送: Collection → Ranking → Briefing → PushNow
-      ⑤ 跳过采集: Ranking → Briefing (使用上轮结果，不重新采集)
-      ⑥ 跳过简报: Collection → Ranking → Push摘要 (内容太多)
-      ⑦ 空数据回退: Collection → (items=0) → 扩大时间窗重新采集
-
-    MVP 简化：固定执行 ①，其他场景的检测逻辑在其他节点实现。
-
-    Returns:
-        sub_agent_plan: 子 Agent 执行计划
-        push_immediate: 是否立即推送
-        planner_reason: 决策理由
+    将当前 Agent 状态摘要发给 LLM，由 LLM 决定下一步调度哪些子 Agent。
+    LLM 失败时回退到标准三板斧。
     """
-    trigger_type = state.get("trigger_type", "daily_briefing")
     react_cycle = state.get("react_cycle_count", 0)
-    obs = state.get("observation_result", {})
-    ranked_items = state.get("ranked_items", [])
-    collection_result = state.get("collected_items", [])
-
+    trigger_type = state.get("trigger_type", "daily_briefing")
     print(f"[planner] ReAct 第 {react_cycle} 轮, trigger={trigger_type}", flush=True)
 
-    # 判断编排策略
-    if obs:
-        suggested = obs.get("suggested_action", "")
-        if "retry_collection" in suggested:
-            plan = [{"agent": "Collection", "params": {"retry": True}}]
-            reason = "观察结果建议重试采集"
-        elif "retry_ranking" in suggested:
-            plan = [{"agent": "Ranking", "params": {"rerank": True}}]
-            reason = "观察结果建议重新排序"
-        else:
-            plan = [{"agent": "Collection", "params": {}}, {"agent": "Ranking", "params": {}}, {"agent": "Briefing", "params": {}}]
-            reason = "标准流程编排"
-    elif react_cycle > 0:
-        # ReAct 再思考：基于之前的观察结果调整
-        plan = [{"agent": "Collection", "params": {}}, {"agent": "Ranking", "params": {}}, {"agent": "Briefing", "params": {}}]
-        reason = "ReAct 循环继续执行"
-    else:
-        # 首次编排：固定执行采集→排序→简报
-        plan = [{"agent": "Collection", "params": {}}, {"agent": "Ranking", "params": {}}, {"agent": "Briefing", "params": {}}]
-        reason = "首次编排：标准每日简报流程"
+    context = _build_planner_context(state)
 
-    # 重大事件检测
-    push_immediate = False
-    if ranked_items and len(ranked_items) > 0:
-        top_item = ranked_items[0]
-        top_score = top_item.get("_score", 0.0)
-        top_importance = top_item.get("importance", 0.5)
-        published_at = top_item.get("published_at", "")
-        if top_score > 0.85 and top_importance >= 0.9:
-            push_immediate = True
-            print(f"[planner] 重大事件检测: top_score={top_score:.4f}, 触发立即推送", flush=True)
+    try:
+        llm = _get_llm_provider()
+        messages = [
+            {"role": "system", "content": PLANNER_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+        ]
+        response = llm.chat(messages, temperature=0.3, max_tokens=1024)
+        text = response if isinstance(response, str) else response.get("content", "{}")
+        plan = _parse_planner_response(text)
+        print(f"[planner] LLM 决策: {json.dumps(plan, ensure_ascii=False)}", flush=True)
+    except Exception as e:
+        print(f"[planner] LLM 调用失败，回退默认: {e}", flush=True)
+        plan = _fallback_plan(state)
 
-    print(f"[planner] 编排计划: {[p['agent'] for p in plan]}, push_immediate={push_immediate}", flush=True)
+    print(f"[planner] 编排计划: {[p['agent'] for p in plan.get('sub_agent_plan', [])]}, "
+          f"push_immediate={plan.get('push_immediate', False)}", flush=True)
+
     return {
-        "sub_agent_plan": plan,
-        "push_immediate": push_immediate,
-        "planner_reason": reason,
+        "sub_agent_plan": plan.get("sub_agent_plan", []),
+        "push_immediate": plan.get("push_immediate", False),
+        "planner_reason": plan.get("reason", ""),
+    }
+
+
+def _build_planner_context(state: FeedLensState) -> dict:
+    """构建 planner 的 LLM 输入上下文。"""
+    obs = state.get("observation_result", {})
+    ranking_detail = state.get("ranking_detail", {})
+    return {
+        "trigger": state.get("trigger_type", "daily_briefing"),
+        "goal": state.get("goal_text", ""),
+        "react_cycle": state.get("react_cycle_count", 0),
+        "collection": {
+            "count": len(state.get("collected_items", [])),
+            "search_supplemented": state.get("search_supplemented", False),
+        },
+        "ranking": {
+            "count": len(state.get("ranked_items", [])),
+            "top_score": ranking_detail.get("top_score", 0),
+        },
+        "briefing": {
+            "quality": state.get("brief_quality", 0),
+        },
+        "last_observation": obs,
+    }
+
+
+def _parse_planner_response(text: str) -> dict:
+    """从 LLM 响应中解析编排计划 JSON，失败则抛异常。"""
+    import re as _re
+    match = _re.search(r'\{[\s\S]*\}', text)
+    json_str = match.group() if match else text
+    plan = json.loads(json_str)
+    # 校验必要字段
+    if not isinstance(plan.get("sub_agent_plan"), list):
+        raise ValueError("sub_agent_plan 不是列表")
+    return plan
+
+
+def _fallback_plan(state: FeedLensState) -> dict:
+    """LLM 调用失败时的默认编排。"""
+    react_cycle = state.get("react_cycle_count", 0)
+    if react_cycle >= 2:
+        # 已经走了两轮，收敛：跳过采集，直接排序+简报
+        return {
+            "sub_agent_plan": [
+                {"agent": "Ranking", "params": {}},
+                {"agent": "Briefing", "params": {}},
+            ],
+            "reason": "已达循环上限，收敛为排序→简报",
+            "push_immediate": False,
+        }
+    return {
+        "sub_agent_plan": [
+            {"agent": "Collection", "params": {}},
+            {"agent": "Ranking", "params": {}},
+            {"agent": "Briefing", "params": {}},
+        ],
+        "reason": "LLM 失败回退，执行标准流程",
+        "push_immediate": False,
     }
 
 
@@ -286,63 +346,42 @@ def invoke_sub_agent_node(state: FeedLensState) -> dict:
 
 
 def observe_results_node(state: FeedLensState) -> dict:
-    """评估子 Agent 输出质量（ReAct 的 Observe 步骤）。
-
-    判断是否需要重试：
-      - 采集结果为空或过少 → retry_collection
-      - 排序质量差（top_score < 0.3）→ retry_ranking
-      - 其他 → done
-
+    """返回结构化观察摘要，供 planner (LLM) 自主决策。
     Returns:
-        observation_result: {quality_summary, needs_retry, suggested_action}
+        observation_result: {collection_ok, ranking_ok, briefing_ok, needs_retry, issues, ...}
     """
     collected = state.get("collected_items", [])
     ranked = state.get("ranked_items", [])
     ranking_detail = state.get("ranking_detail", {})
-    briefing = state.get("briefing", {})
     brief_quality = state.get("brief_quality", 1.0)
 
-    obs = {}
-    quality_summary = []
-    needs_retry = False
-    suggested_action = ""
+    collection_ok = len(collected) >= 3
+    ranking_ok = bool(ranked and ranking_detail.get("top_score", 0) >= 0.3)
+    briefing_ok = brief_quality >= 0.7
+    needs_retry = not (collection_ok and ranking_ok and briefing_ok)
 
-    # 检查采集结果
-    if not collected:
-        quality_summary.append("采集结果为空")
-        needs_retry = True
-        suggested_action = "retry_collection"
-    elif len(collected) < 3:
-        quality_summary.append(f"采集结果过少: {len(collected)} 条 < 3")
-        needs_retry = True
-        suggested_action = "retry_collection"
-
-    # 检查排序结果
-    if ranked and len(ranked) > 0:
-        top_score = ranking_detail.get("top_score", 0.0)
-        if top_score < 0.3:
-            quality_summary.append(f"排序质量差: top_score={top_score:.4f} < 0.3")
-            needs_retry = True
-            suggested_action = "retry_ranking"
-
-    # 检查简报质量
-    if brief_quality < 0.7:
-        quality_summary.append(f"简报质量不达标: score={brief_quality:.2f} < 0.7")
-        # 简报 Agent 自身有重试逻辑，这里不做干预
-
-    if not quality_summary:
-        quality_summary.append("各子 Agent 执行结果质量合格")
+    issues = []
+    if not collection_ok:
+        issues.append(f"采集不足: {len(collected)} 条 < 3")
+    if not ranking_ok:
+        top_score = ranking_detail.get("top_score", 0)
+        issues.append(f"排序不佳: top_score={top_score:.2f} < 0.3")
+    if not briefing_ok:
+        issues.append(f"简报质量低: score={brief_quality:.2f} < 0.7")
 
     observation = {
-        "quality_summary": "; ".join(quality_summary),
+        "collection_ok": collection_ok,
+        "collection_count": len(collected),
+        "ranking_ok": ranking_ok,
+        "ranking_top_score": ranking_detail.get("top_score", 0.0),
+        "briefing_ok": briefing_ok,
+        "briefing_quality": brief_quality,
+        "react_cycle": state.get("react_cycle_count", 0),
         "needs_retry": needs_retry,
-        "suggested_action": suggested_action,
-        "collected_count": len(collected),
-        "ranked_count": len(ranked),
-        "brief_quality": brief_quality,
+        "issues": issues,
     }
 
-    print(f"[observe] 观察结果: {observation['quality_summary']}", flush=True)
+    print(f"[observe] {'⚠' if needs_retry else '✓'} {'; '.join(issues) if issues else '质量合格'}", flush=True)
     return {
         "observation_result": observation,
         "react_cycle_count": state.get("react_cycle_count", 0) + 1,
