@@ -1,4 +1,4 @@
-﻿"""
+"""
 FeedLens LLM Provider 抽象层。
 
 提供统一的 LLM 调用接口，支持：
@@ -87,3 +87,40 @@ class DeepSeekProvider(LLMProvider):
             **kwargs,
         )
         return response.model_dump()
+
+
+# ============================================================
+# LLMRouter — 模型回退链（P4）
+# ============================================================
+
+class LLMRouter(LLMProvider):
+    """按顺序尝试多个 Provider，首个成功即返回；全部失败才抛。
+
+    用于主 LLM 不可用时自动回退到备用 Provider，避免全链路降级。
+    """
+
+    def __init__(self, providers: list[LLMProvider], names: list[str] = None):
+        self._providers = providers
+        self._names = names or [getattr(p, "model", f"provider_{i}") for i, p in enumerate(providers)]
+
+    def chat(self, messages: list[dict], temperature: float = 0.7, max_tokens: int = 4096, **kwargs) -> str:
+        last_err = None
+        for i, p in enumerate(self._providers):
+            try:
+                return p.chat(messages, temperature=temperature, max_tokens=max_tokens, **kwargs)
+            except Exception as e:
+                name = self._names[i] if i < len(self._names) else f"provider_{i}"
+                print(f"[llm_router] {name} 调用失败: {e}，尝试下一个", flush=True)
+                last_err = e
+        raise RuntimeError(f"所有 LLM Provider 均失败，最后错误: {last_err}")
+
+    def chat_with_tools(self, messages: list[dict], tools: list[dict], temperature: float = 0.7, max_tokens: int = 4096, **kwargs) -> dict:
+        last_err = None
+        for i, p in enumerate(self._providers):
+            try:
+                return p.chat_with_tools(messages, tools, temperature=temperature, max_tokens=max_tokens, **kwargs)
+            except Exception as e:
+                name = self._names[i] if i < len(self._names) else f"provider_{i}"
+                print(f"[llm_router] {name} (tools) 调用失败: {e}，尝试下一个", flush=True)
+                last_err = e
+        raise RuntimeError(f"所有 LLM Provider 均失败，最后错误: {last_err}")

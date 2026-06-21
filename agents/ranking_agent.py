@@ -18,6 +18,7 @@ from typing import List, Dict, Any
 
 from langgraph.graph import StateGraph, END
 from utils.config import load_config
+from utils.hooks import hooks
 from agents.state import FeedLensState
 from tools import deduplicate, vector_search, db_read, db_write
 from models.vector_store import VectorStore
@@ -329,14 +330,21 @@ def rank_items_node(state: FeedLensState) -> dict:
     # ---- 1. 权重动态切换（从 config.yaml 读取）----
     rank_cfg = _load_ranking_config()
     feedback_count = len(feedback_history)
-    is_cold_start = feedback_count < rank_cfg["cold_start_threshold"]
-    weights = rank_cfg["weights_cold"] if is_cold_start else rank_cfg["weights_warm"]
+    # rank.weights hook（P1）：冷/热启动判定 + 权重选择
+    weight_ctx = hooks.run("rank.weights", {
+        "feedback_count": feedback_count,
+        "cold_start_threshold": rank_cfg.get("cold_start_threshold", 3),
+        "weights_cold": rank_cfg["weights_cold"],
+        "weights_warm": rank_cfg["weights_warm"],
+    })
+    is_cold_start = weight_ctx.get("is_cold_start", feedback_count < rank_cfg["cold_start_threshold"])
+    weights = weight_ctx.get("weights", rank_cfg["weights_warm"])
     diversity_bonus = rank_cfg["source_diversity_bonus"]
 
-    mode_label = "cold_start" if is_cold_start else "with_feedback"
+    mode_label = weight_ctx.get("mode_label", "cold_start" if is_cold_start else "with_feedback")
     print(f"[rank_items] 权重: {mode_label} (feedback={feedback_count})", flush=True)
 
-    # ---- 2. 反馈偏差映射（数值从 config.yaml 读取）----
+        # ---- 2. 反馈偏差映射（数值从 config.yaml 读取）----
     feedback_bias_map = {}
     for fb in feedback_history:
         item_id = fb.get("item_id", "")
@@ -481,6 +489,23 @@ def should_rerank(state: FeedLensState) -> str:
 # ============================================================
 
 
+
+# ============================================================
+# P1 默认 rank.weights hook
+# ============================================================
+
+def _default_rank_weights(ctx: dict) -> dict:
+    """默认排序权重策略：冷/热启动二选一。"""
+    fb = ctx.get("feedback_count", 0)
+    threshold = ctx.get("cold_start_threshold", 3)
+    is_cold = fb < threshold
+    return {
+        "is_cold_start": is_cold,
+        "weights": ctx["weights_cold"] if is_cold else ctx["weights_warm"],
+        "mode_label": "cold_start" if is_cold else "with_feedback",
+    }
+
+hooks.register("rank.weights", _default_rank_weights)
 def build_ranking_agent():
     """构建排序 Agent StateGraph。"""
     workflow = StateGraph(FeedLensState)

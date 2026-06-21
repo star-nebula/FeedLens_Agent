@@ -1,4 +1,4 @@
-﻿# config.yaml — FeedLens MVP 配置
+# config.yaml — FeedLens MVP 配置
 # 所有标注"可调"的参数均通过此文件读取
 
 # --- 大模型配置 ---
@@ -8,6 +8,11 @@ llm:
     api_key: ${DEEPSEEK_API_KEY}                                  # 从环境变量读取，也可直接填 Key
     base_url: https://api.deepseek.com/v1
     model: deepseek-chat
+  # P4 模型回退：主 LLM 不可用时自动切换备用 Provider（留空则不启用回退）
+  fallback:
+    api_key: ${ALTERNATIVE_API_KEY}      # 备用 key（可用另一账号或兼容 OpenAI 接口的服务）
+    base_url: https://api.xiaomimimo.com/v1
+    model: mimo-v2.5
     temperature: 0.7
     max_tokens: 4096
 
