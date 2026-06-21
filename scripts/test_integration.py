@@ -67,7 +67,9 @@ def _mock_state(overrides: dict = None) -> dict:
 def test_planner_normal_briefing():
     print("\n[test] Planner 场景 — 正常每日简报")
     state = _mock_state({"react_cycle_count": 0, "observation_result": {}})
-    result = planner_node(state)
+    plan = {"sub_agent_plan": [{"agent": "Collection", "params": {}}, {"agent": "Ranking", "params": {}}, {"agent": "Briefing", "params": {}}], "reason": "首次编排：标准每日简报流程", "push_immediate": False}
+    with unittest.mock.patch("agents.main_agent._get_llm_provider", return_value=unittest.mock.MagicMock(chat=unittest.mock.MagicMock(return_value=json.dumps(plan, ensure_ascii=False)))):
+        result = planner_node(state)
     agents = [p["agent"] for p in result["sub_agent_plan"]]
     assert "Collection" in agents and "Ranking" in agents and "Briefing" in agents
     assert result["planner_reason"] == "首次编排：标准每日简报流程"
@@ -80,7 +82,9 @@ def test_planner_retry_collection():
         "react_cycle_count": 1,
         "observation_result": {"suggested_action": "retry_collection"},
     })
-    result = planner_node(state)
+    plan = {"sub_agent_plan": [{"agent": "Collection", "params": {"retry": True}}], "reason": "采集不足重试", "push_immediate": False}
+    with unittest.mock.patch("agents.main_agent._get_llm_provider", return_value=unittest.mock.MagicMock(chat=unittest.mock.MagicMock(return_value=json.dumps(plan, ensure_ascii=False)))):
+        result = planner_node(state)
     plan = result["sub_agent_plan"]
     assert len(plan) == 1 and plan[0]["agent"] == "Collection"
     assert plan[0]["params"].get("retry") is True
@@ -93,7 +97,9 @@ def test_planner_retry_ranking():
         "react_cycle_count": 1,
         "observation_result": {"suggested_action": "retry_ranking"},
     })
-    result = planner_node(state)
+    plan = {"sub_agent_plan": [{"agent": "Ranking", "params": {"rerank": True}}], "reason": "排序不理想重排", "push_immediate": False}
+    with unittest.mock.patch("agents.main_agent._get_llm_provider", return_value=unittest.mock.MagicMock(chat=unittest.mock.MagicMock(return_value=json.dumps(plan, ensure_ascii=False)))):
+        result = planner_node(state)
     plan = result["sub_agent_plan"]
     assert len(plan) == 1 and plan[0]["agent"] == "Ranking"
     assert plan[0]["params"].get("rerank") is True
@@ -106,7 +112,9 @@ def test_planner_react_rethink():
         "react_cycle_count": 1,
         "observation_result": {"needs_retry": True, "suggested_action": "continue"},
     })
-    result = planner_node(state)
+    plan = {"sub_agent_plan": [{"agent": "Collection", "params": {}}, {"agent": "Ranking", "params": {}}], "reason": "ReAct 再思考", "push_immediate": False}
+    with unittest.mock.patch("agents.main_agent._get_llm_provider", return_value=unittest.mock.MagicMock(chat=unittest.mock.MagicMock(return_value=json.dumps(plan, ensure_ascii=False)))):
+        result = planner_node(state)
     agents = [p["agent"] for p in result["sub_agent_plan"]]
     assert "Collection" in agents and "Ranking" in agents
     print(f"  [PASS] ReAct cycle=1, 计划: {agents}")
@@ -174,11 +182,17 @@ def test_full_pipeline():
         unittest.mock.patch("agents.main_agent.db_write", return_value=True),
         unittest.mock.patch("agents.main_agent.PushMCPClient", return_value=mock_push_client),
         unittest.mock.patch("agents.main_agent.VectorStore", return_value=mock_vs),
-        unittest.mock.patch("agents.main_agent.EmbeddingModel", return_value=mock_emb),
-        unittest.mock.patch("agents.collection_agent._load_config", return_value={}),
-        unittest.mock.patch("agents.collection_agent._get_llm_provider", return_value=mock_llm),
-        unittest.mock.patch("agents.ranking_agent._load_config", return_value={}),
-        unittest.mock.patch("agents.ranking_agent._get_llm_provider", return_value=mock_llm),
+       unittest.mock.patch("agents.main_agent.EmbeddingModel", return_value=mock_emb),
+       unittest.mock.patch("agents.collection_agent._get_llm_provider", return_value=mock_llm),
+        unittest.mock.patch("agents.collection_agent.load_config", return_value={}),
+        unittest.mock.patch("agents.ranking_agent.load_config", return_value={}),
+        unittest.mock.patch("agents.collection_agent.SearchMCPClient", return_value=unittest.mock.MagicMock()),
+        unittest.mock.patch("agents.collection_agent.fetch_rss", return_value=[]),
+        unittest.mock.patch("agents.collection_agent.enrich_metadata", return_value=[]),
+        unittest.mock.patch("agents.collection_agent.normalize_items", return_value=[]),
+        unittest.mock.patch("agents.collection_agent._get_rss_sources", return_value=[]),
+        unittest.mock.patch("agents.collection_agent._get_search_query", return_value="AI"),
+       unittest.mock.patch("agents.ranking_agent._get_llm_provider", return_value=mock_llm),
         unittest.mock.patch("agents.ranking_agent._get_vector_store", return_value=mock_vs),
         unittest.mock.patch("agents.ranking_agent._get_embedding_model", return_value=mock_emb),
         unittest.mock.patch("agents.briefing_agent._get_llm_provider", return_value=mock_llm),

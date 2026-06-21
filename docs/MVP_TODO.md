@@ -357,3 +357,22 @@ ender()、内容是 P1 指标仪表盘而非设计的「简报阅读 + 三级反
   - test_main_agent 9/19（无回归）、test_ranking_agent 8/8、test_briefing_agent 12/12。
 - **防无限循环**：靠现有 `max_react_cycles=3` 硬上限兜底。
 - **效果**：强化了项目核心卖点「planner 自主规划」——planner 不只会重试采集，还会自主调整排序策略。
+
+
+## 2026-06-21 — Planner 预判观察脚本 + 集成测试修复
+
+### 新增：scripts/observe_planner.py
+- 用途：单独运行 planner_node（真实 LLM），针对 5 个典型状态打印 LLM 原始返回 + 解析后的编排计划，直观判断 Planner 是否「主动预判跨 Agent 需求」。
+- 观察要点：单次 plan 多 Agent 链式编排、主动注入 params（search_expand/expand_threshold/rerank）、根据 top_score 预判 push_immediate、根据 memory 复用历史经验。
+- 关键前提：必须真实 LLM 可达。LLM 失败时走 _fallback_plan（硬编码三段式），看不到任何预判。
+- 运行：python scripts/observe_planner.py（全场景）或 --scene 1 单场景。
+
+### 修复：scripts/test_integration.py
+- 问题1：test_planner_* 四个场景断言精确中文字符串 reason，但既没 mock LLM 又对不上 fallback 的 reason，网络不通时必然 FAIL。已补上 _get_llm_provider mock。
+- 问题2：test_full_pipeline mock 目标 agents.collection_agent._load_config / agents.ranking_agent._load_config 不存在（实际是 load_config），导致 patch 报错。已改为正确目标并补齐 collection_agent 依赖 mock。
+- 结果：8/8 通过（DEEPSEEK_API_KEY 置空、无网络环境下）。
+
+### 待跟进
+- [ ] 在有网络的真实环境跑 observe_planner.py，记录 DeepSeek 在各场景下的实际预判表现，评估是否需要强化 PLANNER_SYSTEM_PROMPT。
+- [ ] 评估是否给 observe_planner.py 增加 memory 注入场景，验证历史经验对预判的影响。
+- [ ] 记忆库 E:/BaiduSyncdisk/obsidian/AgentLog 在当前 sandbox 无读写权限，本次会话记忆暂存于项目内 docs/MVP_TODO.md，待环境恢复后同步到记忆库。
