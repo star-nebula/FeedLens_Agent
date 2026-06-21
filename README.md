@@ -63,6 +63,7 @@ python -m mcp_servers.search_server
 ```bash
 # 全 mock，无需外部依赖
 python scripts/test_main_agent.py
+python scripts/test_main_agent_finishing.py
 python scripts/test_briefing_agent.py
 python scripts/test_feedback_agent.py
 python scripts/test_memory_manager.py
@@ -75,6 +76,7 @@ python scripts/test_push_scheduler.py
 python scripts/test_ranking_agent.py
 python scripts/test_collection_agent.py
 python scripts/test_fc_tools.py
+python scripts/test_embedding_speed.py
 
 # 需要先启动 MCP search_server
 python scripts/test_mcp_servers.py
@@ -124,7 +126,7 @@ FeedLens_Agent/
 │   ├── calibrate_dedup.py     # 去重校准
 │   ├── test_data/
 │   │   └── sample_feed.xml    # 测试数据
-│   └── test_*.py              # 测试脚本（共16个）
+│   └── test_*.py              # 测试脚本（共15个）
 ├── app.py              # Streamlit 入口
 └── docs/              # 文档
     ├── FeedLens_MVP_Design_Document.md   # MVP 设计文档 (v1.0)
