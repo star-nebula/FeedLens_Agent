@@ -83,4 +83,7 @@ def _render_dashboard():
     except Exception as e:
         st.warning(f"仪表盘数据加载失败: {e}")
 
-_render_dashboard()
+
+def render():
+    """入口函数，供 app.py 路由调用。"""
+    _render_dashboard()

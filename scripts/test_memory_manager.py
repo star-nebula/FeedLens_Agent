@@ -175,7 +175,7 @@ def test_memory_manager_compress():
     mock_llm.chat.return_value = {"content": "压缩后的摘要"}
 
     with unittest.mock.patch("utils.llm_provider.DeepSeekProvider", return_value=mock_llm):
-        with unittest.mock.patch("utils.memory_manager._load_config", return_value={}):
+        with unittest.mock.patch("utils.memory_manager.load_config", return_value={"llm": {"deepseek": {"api_key": "mock_key", "model": "mock-model"}}}):
             mm = MemoryManager()
             mm.short_term = mock_stm
             mm.long_term = mock_ltm
@@ -198,7 +198,7 @@ def test_memory_manager_compress_fallback():
     with unittest.mock.patch("utils.llm_provider.DeepSeekProvider") as MockLLM:
         MockLLM.side_effect = Exception("LLM 不可用")
 
-        with unittest.mock.patch("utils.memory_manager._load_config", return_value={}):
+        with unittest.mock.patch("utils.memory_manager.load_config", return_value={"llm": {"deepseek": {"api_key": "mock_key", "model": "mock-model"}}}):
             mm = MemoryManager()
             mm.short_term = mock_stm
             mm.long_term = mock_ltm

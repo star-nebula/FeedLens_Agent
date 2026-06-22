@@ -248,7 +248,7 @@ def _update_keyword_preference(db: Database, user_id: int, keyword: str, feedbac
 
             if row:
                 # 更新现有记录
-                current_count = row["feedback_count"]
+                current_count = row["feedback_count"] or 0
                 new_count = current_count + 1
                 weight = _compute_preference_weight(feedback_type, new_count)
                 conn.execute(

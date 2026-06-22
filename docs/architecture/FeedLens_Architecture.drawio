@@ -1,0 +1,392 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="drawio" version="26.0.0">
+  <diagram name="FeedLens Architecture">
+    <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <!-- ==================== 标题 ==================== -->
+        <mxCell id="title" value="FeedLens — 智能信息简报 Agent 系统架构" style="text;html=1;fontSize=22;fontStyle=1;align=center;verticalAlign=middle;fontColor=#333333;" vertex="1" parent="1">
+          <mxGeometry x="400" y="10" width="700" height="40" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== 外部系统层 ==================== -->
+        <mxCell id="external_tier" value="外部系统" style="swimlane;startSize=28;fillColor=#f5f5f5;strokeColor=#999999;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="70" width="1420" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="user_node" value="User&#xa;(Browser)" style="ellipse;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;" vertex="1" parent="external_tier">
+          <mxGeometry x="80" y="35" width="100" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="rss_sources" value="External RSS&#xa;Sources" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;fontSize=10;" vertex="1" parent="external_tier">
+          <mxGeometry x="600" y="35" width="110" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="web_search" value="Web Search&#xa;API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;fontSize=10;" vertex="1" parent="external_tier">
+          <mxGeometry x="750" y="35" width="110" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== 展示层 ==================== -->
+        <mxCell id="presentation_tier" value="展示层 (Streamlit)" style="swimlane;startSize=28;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="200" width="1420" height="100" as="geometry" />
+        </mxCell>
+        <mxCell id="app_node" value="app.py&#xa;(Page Router)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=11;fontStyle=1;" vertex="1" parent="presentation_tier">
+          <mxGeometry x="80" y="32" width="130" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="home_page" value="Home" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="presentation_tier">
+          <mxGeometry x="240" y="32" width="90" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="goal_page" value="Goal 设置" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="presentation_tier">
+          <mxGeometry x="350" y="32" width="90" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="sources_page" value="源管理" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="presentation_tier">
+          <mxGeometry x="460" y="32" width="90" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="feedback_page" value="反馈记录" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="presentation_tier">
+          <mxGeometry x="570" y="32" width="90" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="logs_page" value="执行日志" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="presentation_tier">
+          <mxGeometry x="680" y="32" width="90" height="50" as="geometry" />
+        </mxCell>
+        <mxCell id="dashboard_page" value="执行仪表盘" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=10;" vertex="1" parent="presentation_tier">
+          <mxGeometry x="790" y="32" width="90" height="50" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== 编排层 ==================== -->
+        <mxCell id="orchestration_tier" value="编排层 (Pipeline + Hooks)" style="swimlane;startSize=28;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="320" width="1420" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="pipeline_runner" value="Pipeline Runner&#xa;(pipeline_runner.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=11;fontStyle=1;" vertex="1" parent="orchestration_tier">
+          <mxGeometry x="80" y="35" width="160" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="exec_fence" value="Execution Fence (P2)&#xa;per-user lock" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;" vertex="1" parent="orchestration_tier">
+          <mxGeometry x="280" y="35" width="150" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="scheduler_node" value="APScheduler&#xa;cron: 06:00 daily" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffe6cc;strokeColor=#d79b00;fontSize=10;" vertex="1" parent="orchestration_tier">
+          <mxGeometry x="470" y="35" width="150" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="hooks_registry" value="Hook Registry (P1)&#xa;4 Hook Points" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=10;fontStyle=1;" vertex="1" parent="orchestration_tier">
+          <mxGeometry x="660" y="35" width="160" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="config_node" value="Config&#xa;(config.yaml)" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;dashed=1;fontSize=10;" vertex="1" parent="orchestration_tier">
+          <mxGeometry x="860" y="35" width="110" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== Agent 层 ==================== -->
+        <mxCell id="agent_tier" value="Agent 层 (LangGraph StateGraph)" style="swimlane;startSize=28;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="450" width="1420" height="200" as="geometry" />
+        </mxCell>
+
+        <!-- Main Agent 内部结构 -->
+        <mxCell id="main_agent_outer" value="Main Agent (Coordinator + Planner) — main_agent.py" style="swimlane;startSize=24;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=10;fontStyle=1;" vertex="1" parent="agent_tier">
+          <mxGeometry x="40" y="32" width="600" height="155" as="geometry" />
+        </mxCell>
+        <mxCell id="understand_intent" value="understand_intent" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="main_agent_outer">
+          <mxGeometry x="20" y="30" width="110" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="planner_node" value="planner&#xa;(LLM 自主编排)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;fontStyle=1;" vertex="1" parent="main_agent_outer">
+          <mxGeometry x="155" y="30" width="120" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="invoke_node" value="invoke_sub_agent&#xa;(error isolation)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="main_agent_outer">
+          <mxGeometry x="300" y="30" width="120" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="observe_node" value="observe_results&#xa;(Hook: observe.evaluate)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="main_agent_outer">
+          <mxGeometry x="445" y="30" width="130" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="reflect_node" value="coordinator_reflect&#xa;(Hook: reflect.check)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="main_agent_outer">
+          <mxGeometry x="20" y="85" width="130" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="push_node" value="push_notification&#xa;(MCP stdio)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="main_agent_outer">
+          <mxGeometry x="175" y="85" width="120" height="35" as="geometry" />
+        </mxCell>
+        <mxCell id="update_mem_node" value="update_memory&#xa;(P0: write decision exp)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="main_agent_outer">
+          <mxGeometry x="320" y="85" width="140" height="35" as="geometry" />
+        </mxCell>
+
+        <!-- Sub Agents -->
+        <mxCell id="collection_agent" value="Collection Agent&#xa;fetch_rss → enrich → normalize&#xa;(collection_agent.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="agent_tier">
+          <mxGeometry x="680" y="35" width="170" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="ranking_agent" value="Ranking Agent&#xa;dedup → rank → (ReAct: rerank?)&#xa;(ranking_agent.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="agent_tier">
+          <mxGeometry x="680" y="100" width="170" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="briefing_agent" value="Briefing Agent&#xa;generate → quality_check → retry?&#xa;(briefing_agent.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="agent_tier">
+          <mxGeometry x="890" y="35" width="170" height="55" as="geometry" />
+        </mxCell>
+        <mxCell id="feedback_agent" value="Feedback Agent (Async)&#xa;record → update_preference → vector_add&#xa;(feedback_agent.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="agent_tier">
+          <mxGeometry x="890" y="100" width="170" height="55" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== 记忆系统层 ==================== -->
+        <mxCell id="memory_tier" value="记忆系统" style="swimlane;startSize=28;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="670" width="1420" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="memory_manager" value="Memory Manager (P0)&#xa;STM (deque 15) + Episodic (SQLite)&#xa;+ LTM (ChromaDB) + compress_window" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=10;fontStyle=1;" vertex="1" parent="memory_tier">
+          <mxGeometry x="80" y="32" width="290" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="chroma_db" value="ChromaDB&#xa;Vector Store&#xa;feed_items / user_preference / domain_knowledge" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=9;" vertex="1" parent="memory_tier">
+          <mxGeometry x="450" y="28" width="170" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="sqlite_db" value="SQLite (WAL Mode)&#xa;users / sources / raw_items / deduped_items&#xa;feedback / user_preferences / briefs&#xa;execution_logs / run_logs / notifications" style="shape=cylinder3;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#666666;fontSize=9;" vertex="1" parent="memory_tier">
+          <mxGeometry x="680" y="28" width="220" height="70" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== 基础设施层 ==================== -->
+        <mxCell id="infra_tier" value="基础设施层 (Tools + MCP + LLM)" style="swimlane;startSize=28;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="40" y="810" width="1420" height="120" as="geometry" />
+        </mxCell>
+        <mxCell id="llm_router_node" value="LLM Router (P4)&#xa;DeepSeek → Fallback&#xa;(llm_provider.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=10;fontStyle=1;" vertex="1" parent="infra_tier">
+          <mxGeometry x="80" y="32" width="150" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="fc_tools_node" value="FC Tools&#xa;fetch_rss / enrich_metadata / normalize&#xa;deduplicate / vector_search / db_rw&#xa;(fc_tools.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;" vertex="1" parent="infra_tier">
+          <mxGeometry x="280" y="28" width="210" height="70" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp_search_node" value="MCP Search Server&#xa;SSE (:8100)&#xa;(search_server.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;" vertex="1" parent="infra_tier">
+          <mxGeometry x="540" y="32" width="140" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="mcp_push_node" value="MCP Push Server&#xa;stdio&#xa;(push_server.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;" vertex="1" parent="infra_tier">
+          <mxGeometry x="730" y="32" width="140" height="65" as="geometry" />
+        </mxCell>
+        <mxCell id="error_isolation" value="Error Isolation&#xa;task_error_isolation&#xa;run_with_isolation" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;" vertex="1" parent="infra_tier">
+          <mxGeometry x="920" y="32" width="140" height="65" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== 图例 ==================== -->
+        <mxCell id="legend_box" value="" style="swimlane;startSize=24;fillColor=#FFFFFF;strokeColor=#999999;fontSize=10;fontStyle=1;" vertex="1" parent="1">
+          <mxGeometry x="40" y="950" width="400" height="80" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_title" value="图例" style="text;html=1;fontSize=11;fontStyle=1;" vertex="1" parent="legend_box">
+          <mxGeometry x="10" y="0" width="50" height="20" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_p0" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=9;" vertex="1" parent="legend_box">
+          <mxGeometry x="10" y="28" width="20" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_p0_label" value="Agent 层" style="text;html=1;fontSize=9;" vertex="1" parent="legend_box">
+          <mxGeometry x="35" y="26" width="60" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_p1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;" vertex="1" parent="legend_box">
+          <mxGeometry x="100" y="28" width="20" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_p1_label" value="编排/Hook" style="text;html=1;fontSize=9;" vertex="1" parent="legend_box">
+          <mxGeometry x="125" y="26" width="70" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_p4" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8cecc;strokeColor=#b85450;fontSize=9;" vertex="1" parent="legend_box">
+          <mxGeometry x="205" y="28" width="20" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_p4_label" value="基础设施" style="text;html=1;fontSize=9;" vertex="1" parent="legend_box">
+          <mxGeometry x="230" y="26" width="55" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_mem" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=9;" vertex="1" parent="legend_box">
+          <mxGeometry x="300" y="28" width="20" height="14" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_mem_label" value="记忆系统" style="text;html=1;fontSize=9;" vertex="1" parent="legend_box">
+          <mxGeometry x="325" y="26" width="60" height="16" as="geometry" />
+        </mxCell>
+        <mxCell id="legend_evolved" value="★ = 架构演进新增 (P0/P1/P2/P4)" style="text;html=1;fontSize=9;fontColor=#b85450;" vertex="1" parent="legend_box">
+          <mxGeometry x="10" y="48" width="200" height="16" as="geometry" />
+        </mxCell>
+
+        <!-- ==================== 连接线 ==================== -->
+
+        <!-- User → Streamlit -->
+        <mxCell id="edge_user_app" value="" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="user_node" target="app_node">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Pipeline → Main Agent -->
+        <mxCell id="edge_pipeline_main" value="run StateGraph" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=9;" edge="1" parent="1" source="pipeline_runner" target="main_agent_outer">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Fence → Pipeline -->
+        <mxCell id="edge_fence_pipeline" value="acquire lock" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=9;" edge="1" parent="1" source="exec_fence" target="pipeline_runner">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Scheduler → Pipeline -->
+        <mxCell id="edge_scheduler_pipeline" value="cron trigger" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;fontSize=9;dashed=1;" edge="1" parent="1" source="scheduler_node" target="pipeline_runner">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="545" y="310" />
+              <mxPoint x="300" y="310" />
+              <mxPoint x="300" y="383" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Hooks → Main Agent (observe.evaluate / reflect.check / push.decide) -->
+        <mxCell id="edge_hooks_main" value="observe.evaluate&#xa;reflect.check&#xa;push.decide" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=1;entryDx=0;entryDy=0;fontSize=8;fontColor=#d6b656;" edge="1" parent="1" source="hooks_registry" target="main_agent_outer">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="740" y="450" />
+              <mxPoint x="30" y="450" />
+              <mxPoint x="30" y="637" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Hooks → Ranking (rank.weights) -->
+        <mxCell id="edge_hooks_ranking" value="rank.weights" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=9;fontColor=#d6b656;" edge="1" parent="1" source="hooks_registry" target="ranking_agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Main Agent → Sub Agents -->
+        <mxCell id="edge_main_collection" value="invoke" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.25;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=9;" edge="1" parent="1" source="main_agent_outer" target="collection_agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_main_ranking" value="invoke" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=9;" edge="1" parent="1" source="main_agent_outer" target="ranking_agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_main_briefing" value="invoke" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.75;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=9;" edge="1" parent="1" source="main_agent_outer" target="briefing_agent">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_main_feedback" value="async invoke" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.85;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=9;dashed=1;" edge="1" parent="1" source="main_agent_outer" target="feedback_agent">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="660" y="630" />
+              <mxPoint x="660" y="655" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Collection → FC Tools / MCP Search -->
+        <mxCell id="edge_collection_fc" value="fetch_rss / enrich / normalize" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.25;entryY=0;entryDx=0;entryDy=0;fontSize=8;" edge="1" parent="1" source="collection_agent" target="fc_tools_node">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_collection_mcp" value="search_web" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=9;" edge="1" parent="1" source="collection_agent" target="mcp_search_node">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Ranking → FC Tools / ChromaDB -->
+        <mxCell id="edge_ranking_fc" value="dedup / rank / vector_search" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=8;" edge="1" parent="1" source="ranking_agent" target="fc_tools_node">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_ranking_chroma" value="query preference" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=8;" edge="1" parent="1" source="ranking_agent" target="chroma_db">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Briefing → FC Tools -->
+        <mxCell id="edge_briefing_fc" value="generate / quality_check" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;fontSize=8;" edge="1" parent="1" source="briefing_agent" target="fc_tools_node">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Main Agent → MCP Push -->
+        <mxCell id="edge_main_push" value="push_notification" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=9;" edge="1" parent="1" source="main_agent_outer" target="mcp_push_node">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="340" y="700" />
+              <mxPoint x="800" y="700" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Main Agent → Memory Manager -->
+        <mxCell id="edge_main_memory" value="get_context (P0)&#xa;add_memory (P0)" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=0.5;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=8;fontColor=#9673a6;" edge="1" parent="1" source="main_agent_outer" target="memory_manager">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="25" y="527" />
+              <mxPoint x="225" y="527" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Memory Manager → ChromaDB / SQLite -->
+        <mxCell id="edge_memory_chroma" value="LTM" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.3;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=9;" edge="1" parent="1" source="memory_manager" target="chroma_db">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_memory_sqlite" value="Episodic" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=1;exitY=0.7;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;fontSize=9;" edge="1" parent="1" source="memory_manager" target="sqlite_db">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Feedback → ChromaDB / SQLite -->
+        <mxCell id="edge_feedback_chroma" value="update preference" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=8;dashed=1;" edge="1" parent="1" source="feedback_agent" target="chroma_db">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+        <mxCell id="edge_feedback_sqlite" value="write feedback" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=8;dashed=1;" edge="1" parent="1" source="feedback_agent" target="sqlite_db">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="975" y="660" />
+              <mxPoint x="790" y="660" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Main Agent → LLM Router -->
+        <mxCell id="edge_main_llm" value="chat()" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=9;" edge="1" parent="1" source="main_agent_outer" target="llm_router_node">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <!-- Ranking → LLM Router -->
+        <mxCell id="edge_ranking_llm" value="LLM adjudication" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=1;exitDx=0;exitDy=0;entryX=0.75;entryY=0;entryDx=0;entryDy=0;fontSize=8;" edge="1" parent="1" source="ranking_agent" target="llm_router_node">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="680" y="810" />
+              <mxPoint x="193" y="810" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Memory Manager → LLM Router -->
+        <mxCell id="edge_memory_llm" value="compress_window" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;fontSize=8;dashed=1;" edge="1" parent="1" source="memory_manager" target="llm_router_node">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="120" y="810" />
+              <mxPoint x="155" y="810" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Collection → RSS Sources -->
+        <mxCell id="edge_collection_rss" value="feedparser" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;fontSize=9;dashed=1;" edge="1" parent="1" source="collection_agent" target="rss_sources">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="765" y="180" />
+              <mxPoint x="655" y="180" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- MCP Search → Web Search -->
+        <mxCell id="edge_search_web" value="search API" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;fontSize=9;dashed=1;" edge="1" parent="1" source="mcp_search_node" target="web_search">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="610" y="180" />
+              <mxPoint x="805" y="180" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Pipeline → Config -->
+        <mxCell id="edge_pipeline_config" value="load config" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;fontSize=9;dashed=1;" edge="1" parent="1" source="pipeline_runner" target="config_node">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="160" y="300" />
+              <mxPoint x="915" y="300" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- Main Agent → SQLite (save briefs) -->
+        <mxCell id="edge_main_sqlite" value="save briefs / items" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;fontSize=8;" edge="1" parent="1" source="main_agent_outer" target="sqlite_db">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="340" y="700" />
+              <mxPoint x="950" y="700" />
+              <mxPoint x="950" y="733" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- App → Pipeline (trigger pipeline from UI) -->
+        <mxCell id="edge_app_pipeline" value="trigger pipeline" style="edgeStyle=orthogonalEdgeStyle;rounded=1;orthogonalLoop=1;jettySize=auto;html=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=1;entryDx=0;entryDy=0;fontSize=9;dashed=1;" edge="1" parent="1" source="app_node" target="pipeline_runner">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points">
+              <mxPoint x="145" y="290" />
+              <mxPoint x="80" y="290" />
+            </Array>
+          </mxGeometry>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

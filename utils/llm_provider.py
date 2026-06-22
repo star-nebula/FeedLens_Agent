@@ -1,16 +1,15 @@
 """
-FeedLens LLM Provider 抽象层。
+FeedLens LLM Provider abstraction layer.
 
-提供统一的 LLM 调用接口，支持：
-  - DeepSeek Chat（主力，OpenAI 兼容）
-  - 预留 fallback 扩展点
+Provides a unified LLM call interface, supporting:
+  - DeepSeek Chat (primary, OpenAI-compatible)
+  - Reserved fallback extension point
 
 Usage:
     from utils.llm_provider import LLMProvider, DeepSeekProvider
     llm = DeepSeekProvider(api_key="...", model="deepseek-chat")
     reply = llm.chat([{"role": "user", "content": "Hello"}])
 """
-
 from abc import ABC, abstractmethod
 from openai import OpenAI
 

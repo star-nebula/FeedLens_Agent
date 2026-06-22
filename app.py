@@ -12,6 +12,7 @@ from ui.pages import (
     sources_page,
     feedback_page,
     logs_page,
+    dashboard_page,
 )
 
 # 页面配置
@@ -28,7 +29,7 @@ st.sidebar.markdown("---")
 
 page = st.sidebar.radio(
     "导航",
-    ["首页", "Goal 设置", "RSS 源管理", "反馈记录", "执行日志"],
+    ["首页", "Goal 设置", "RSS 源管理", "反馈记录", "执行日志", "执行仪表盘"],
     label_visibility="collapsed",
 )
 
@@ -54,3 +55,5 @@ elif page == "反馈记录":
     feedback_page.render()
 elif page == "执行日志":
     logs_page.render()
+elif page == "执行仪表盘":
+    dashboard_page.render()

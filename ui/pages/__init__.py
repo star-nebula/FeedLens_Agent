@@ -8,6 +8,7 @@ from ui.pages import (
     sources_page,
     feedback_page,
     logs_page,
+    dashboard_page,
 )
 
 __all__ = [
@@ -16,4 +17,5 @@ __all__ = [
     "sources_page",
     "feedback_page",
     "logs_page",
+    "dashboard_page",
 ]

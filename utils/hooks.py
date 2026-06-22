@@ -1,17 +1,17 @@
-"""Hook 系统 — 策略点的可注册扩展机制（P1）。
+"""Hook system ? pluggable strategy extension mechanism (P1).
 
-将 observe/reflect/push/rank 等节点的硬编码策略逻辑提取为
-可注册的 Hook，后续新增策略无需改核心编排代码。
+Extract hard-coded strategy logic from observe/reflect/push/rank nodes
+into pluggable Hooks, so new strategies can be added without modifying
+core orchestration code.
 
-每个 Hook 接收 dict ctx（状态片段），返回 dict（策略结果字段）。
-调用方通过 dict.update() 合并结果，保留未覆盖字段。
+Each Hook receives dict ctx (state fragment), returns dict (strategy result).
+Caller merges results via dict.update(), preserving uncovered fields.
 
 Usage:
     from utils.hooks import hooks
     hooks.register("observe.evaluate", my_custom_eval)
     ctx = hooks.run("observe.evaluate", ctx)
 """
-
 from typing import Callable
 
 

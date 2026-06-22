@@ -15,6 +15,7 @@ def test_coordinator_reflect_pass():
     print("\n[test] coordinator_reflect_node - 审查通过")
     state = {
         "observation_result": {"brief_quality": 0.8},
+        "brief_quality": 0.8,  # 直接字段，coordinator_reflect 降级读取
         "ranking_result": {
             "ranked_items": [{"id": "1", "title": "test", "url": "http://x.com"}],
             "item_relations": [],
@@ -114,17 +115,11 @@ def test_push_notification_with_briefing():
         "user_id": 1,
         "push_immediate": False,
     }
-    with unittest.mock.patch("agents.main_agent.PushMCPClient") as MockClient:
-        mock_client = unittest.mock.MagicMock()
-        mock_client.__enter__ = unittest.mock.MagicMock(return_value=mock_client)
-        mock_client.__exit__ = unittest.mock.MagicMock(return_value=None)
-        mock_client.push.return_value = True
-        MockClient.return_value = mock_client
-
+    with unittest.mock.patch("tools.mcp_client.push_notification", return_value=True) as mock_push:
         result = ma.push_notification_node(state)
 
     assert result["push_status"] == "sent"
-    call_args = mock_client.push.call_args
+    call_args = mock_push.call_args
     brief = call_args[1]["brief"]
     assert "categories" in brief
     assert "markdown" in brief
@@ -143,17 +138,11 @@ def test_push_notification_fallback():
         "user_id": 1,
         "push_immediate": False,
     }
-    with unittest.mock.patch("agents.main_agent.PushMCPClient") as MockClient:
-        mock_client = unittest.mock.MagicMock()
-        mock_client.__enter__ = unittest.mock.MagicMock(return_value=mock_client)
-        mock_client.__exit__ = unittest.mock.MagicMock(return_value=None)
-        mock_client.push.return_value = False
-        MockClient.return_value = mock_client
-
+    with unittest.mock.patch("tools.mcp_client.push_notification", return_value=False) as mock_push:
         result = ma.push_notification_node(state)
 
     assert result["push_status"] == "failed"
-    call_args = mock_client.push.call_args
+    call_args = mock_push.call_args
     brief = call_args[1]["brief"]
     assert "items" in brief
     print(f"  [PASS] 降级推送: {result['push_message']}")
