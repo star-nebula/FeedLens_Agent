@@ -56,7 +56,8 @@ class FeedLensState(TypedDict, total=False):
     feedback_count: int                      # 累计反馈数（用于冷启动/偏好切换判断）
 
     # ---- 记忆 ----
-    short_term_memory: list[dict[str, Any]]  # 最近 15 轮摘要
+    # FeedLens 每天一次独立执行，短期记忆由 SQLite(近7天) + ChromaDB(语义) 替代
+    short_term_memory: list[dict[str, Any]]  # 已弃用，保留字段兼容
     execution_log: dict[str, Any]            # 当前执行日志（写入 execution_logs）
 
     # ---- 错误与状态 ----

@@ -145,15 +145,20 @@ def test_planner_fallback_on_llm_failure():
 
 
 def test_planner_context_contains_memory():
-    """P0 验收：_build_planner_context 返回的上下文含 memory 字段。"""
+    """P0 验收：_build_planner_context 返回的上下文含 memory 字段（FeedLens 适配）。"""
     print("\n[test] _build_planner_context - P0 记忆字段注入")
     state = _mock_state({"collected_items": [{"id": "1"}, {"id": "2"}, {"id": "3"}], "ranking_detail": {"top_score": 0.6}, "brief_quality": 0.8})
-    with unittest.mock.patch("agents.main_agent.get_context", return_value={"short_term": [{"turn": 1}], "long_term": [{"document": "历史经验A"}], "short_term_size": 1}):
+    with unittest.mock.patch("agents.main_agent.get_context", return_value={
+        "episodic": [{"session_id": "s1", "created_at": "2026-06-21", "metadata": {"situation": "采集10条", "outcome": "ok"}}],
+        "long_term": [{"document": "历史经验A"}],
+        "episodic_count": 1, "long_term_count": 1,
+    }):
         ctx = ma._build_planner_context(state)
     assert "memory" in ctx, "memory 字段缺失"
-    assert ctx["memory"]["recent_turns"] == [{"turn": 1}], f"recent_turns 错误: {ctx['memory']}"
+    assert len(ctx["memory"]["recent_executions"]) == 1, f"recent_executions 错误: {ctx['memory']}"
+    assert ctx["memory"]["recent_executions"][0]["session_id"] == "s1"
     assert ctx["memory"]["relevant_history"] == ["历史经验A"], f"relevant_history 错误: {ctx['memory']}"
-    print(f"  [PASS] memory 字段含 recent_turns(1) + relevant_history(1)")
+    print(f"  [PASS] memory 字段含 recent_executions(1) + relevant_history(1)")
 
 
 def test_planner_context_memory_degradation():
@@ -163,7 +168,7 @@ def test_planner_context_memory_degradation():
     with unittest.mock.patch("agents.main_agent.get_context", side_effect=Exception("ChromaDB 不可用")):
         ctx = ma._build_planner_context(state)
     assert "memory" in ctx, "降级后仍应有 memory 字段"
-    assert ctx["memory"]["recent_turns"] == [], f"降级应为空: {ctx['memory']}"
+    assert ctx["memory"]["recent_executions"] == [], f"降级应为空: {ctx['memory']}"
     assert ctx["memory"]["relevant_history"] == [], f"降级应为空: {ctx['memory']}"
     print(f"  [PASS] 记忆检索失败降级为空 memory，无异常")
 

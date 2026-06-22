@@ -1,8 +1,3 @@
-让我先确认现有的测试脚本和项目运行方式。
-现在我已全面掌握项目结构和测试资产。以下是完整流程。
-
----
-
 ## FeedLens 改进验证与微调完整流程
 
 ### 阶段一：单元回归测试（确保改进不破坏现有行为）
@@ -112,12 +107,16 @@ from utils.llm_provider import DeepSeekProvider, LLMRouter
 
 # 模拟：第一个Provider失败，第二个成功
 class FailProvider:
-    def chat(self, **kw): raise Exception('模拟故障')
-    def chat_with_tools(self, **kw): raise Exception('模拟故障')
+    def chat(self, messages, temperature=0.7, max_tokens=4096, **kwargs):
+        raise Exception('模拟故障')
+    def chat_with_tools(self, messages, tools, temperature=0.7, max_tokens=4096, **kwargs):
+        raise Exception('模拟故障')
 
 class OkProvider:
-    def chat(self, **kw): return 'fallback_ok'
-    def chat_with_tools(self, **kw): return {'choices':[{'message':{'content':'ok'}}]}
+    def chat(self, messages, temperature=0.7, max_tokens=4096, **kwargs):
+        return 'fallback_ok'
+    def chat_with_tools(self, messages, tools, temperature=0.7, max_tokens=4096, **kwargs):
+        return {'choices':[{'message':{'content':'ok'}}]}
 
 router = LLMRouter([FailProvider(), OkProvider()], names=['fail','ok'])
 result = router.chat([{'role':'user','content':'hi'}])
@@ -217,3 +216,38 @@ streamlit run app.py
 | P4 验证 | 阶段二 2.4 一行命令 | `回退结果: fallback_ok` |
 | 真机运行 | `python utils/pipeline_runner.py --trigger manual` | 无 Exception，日志完整 |
 | UI 启动 | `streamlit run app.py` | 页面正常渲染 |
+
+---
+
+### 附录：其他可用测试脚本（来自 MVP 阶段）
+
+以下命令在 MVP 开发阶段使用，部分已融入阶段一单元测试，保留供参考：
+
+```powershell
+# 数据库初始化验证
+python scripts/init_db.py
+
+# Embedding 推理速度（< 100ms/条）
+python scripts/test_embedding_speed.py
+
+# FC 工具验证
+python scripts/test_fc_tools.py
+
+# 去重阈值校准（需标注样本）
+python scripts/calibrate_dedup.py --samples data/labeled_dedup_samples.json
+
+# 推送机制
+python scripts/test_push_scheduler.py
+
+# 反馈机制
+python scripts/test_feedback_agent.py
+
+# 冷启动→偏好自适应切换
+python scripts/test_cold_start_switch.py
+
+# 日志和监控
+python scripts/test_logging_monitoring.py
+
+# 性能基准测试
+python scripts/test_performance.py
+```

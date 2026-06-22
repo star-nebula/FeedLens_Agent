@@ -1,151 +1,151 @@
 <mxfile host="65bd71144e">
-    <diagram id="simple-arch2" name="Architecture with Memory">
-        <mxGraphModel dx="-619" dy="-345" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1050" math="0" shadow="0">
+    <diagram id="simple-arch2" name="Architecture with Memory v2">
+        <mxGraphModel dx="70" dy="-32" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1050" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
-                <mxCell id="71" value="FeedLens Agent 核心运行流程 — 记忆系统交互版" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=22;fontStyle=1;fontColor=#1a1a2e;" vertex="1" parent="1">
+                <mxCell id="71" value="FeedLens Agent 核心运行流程 — 记忆系统交互版 v2" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=22;fontStyle=1;fontColor=#1a1a2e;" parent="1" vertex="1">
                     <mxGeometry x="2280" y="2020" width="800" height="35" as="geometry"/>
                 </mxCell>
-                <mxCell id="72" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;strokeWidth=2;dashed=1;opacity=25;" vertex="1" parent="1">
+                <mxCell id="72" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E3F2FD;strokeColor=#1565C0;strokeWidth=2;dashed=1;opacity=25;" parent="1" vertex="1">
                     <mxGeometry x="1920" y="2070" width="1520" height="95" as="geometry"/>
                 </mxCell>
-                <mxCell id="73" value="输入：从哪里来？" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#1565C0;" vertex="1" parent="1">
+                <mxCell id="73" value="输入：从哪里来？" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#1565C0;" parent="1" vertex="1">
                     <mxGeometry x="1935" y="2075" width="200" height="25" as="geometry"/>
                 </mxCell>
-                <mxCell id="74" value="⏰ 定时触发" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1976D2;strokeWidth=1.5;fontSize=14;fontStyle=1;fontColor=#0D47A1;" vertex="1" parent="1">
+                <mxCell id="74" value="⏰ 定时触发" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1976D2;strokeWidth=1.5;fontSize=14;fontStyle=1;fontColor=#0D47A1;" parent="1" vertex="1">
                     <mxGeometry x="2000" y="2108" width="150" height="42" as="geometry"/>
                 </mxCell>
-                <mxCell id="75" value="👤 手动触发" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1976D2;strokeWidth=1.5;fontSize=14;fontStyle=1;fontColor=#0D47A1;" vertex="1" parent="1">
+                <mxCell id="75" value="👤 手动触发" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1976D2;strokeWidth=1.5;fontSize=14;fontStyle=1;fontColor=#0D47A1;" parent="1" vertex="1">
                     <mxGeometry x="2240" y="2108" width="150" height="42" as="geometry"/>
                 </mxCell>
-                <mxCell id="76" value="🔔 异常推送" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1976D2;strokeWidth=1.5;fontSize=14;fontStyle=1;fontColor=#0D47A1;" vertex="1" parent="1">
+                <mxCell id="76" value="🔔 异常推送" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1976D2;strokeWidth=1.5;fontSize=14;fontStyle=1;fontColor=#0D47A1;" parent="1" vertex="1">
                     <mxGeometry x="2480" y="2108" width="150" height="42" as="geometry"/>
                 </mxCell>
-                <mxCell id="77" value="📡 数据源 (RSS / 网页 / 偏好)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1976D2;strokeWidth=1.5;fontSize=14;fontStyle=1;fontColor=#0D47A1;" vertex="1" parent="1">
+                <mxCell id="77" value="📡 数据源 (RSS / 网页 / 偏好)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#BBDEFB;strokeColor=#1976D2;strokeWidth=1.5;fontSize=14;fontStyle=1;fontColor=#0D47A1;" parent="1" vertex="1">
                     <mxGeometry x="2720" y="2108" width="230" height="42" as="geometry"/>
                 </mxCell>
-                <mxCell id="78" value="" style="endArrow=block;html=1;strokeWidth=2.5;strokeColor=#546E7A;endFill=1;" edge="1" parent="1">
+                <mxCell id="78" value="" style="endArrow=block;html=1;strokeWidth=2.5;strokeColor=#546E7A;endFill=1;" parent="1" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2680" y="2165" as="sourcePoint"/>
                         <mxPoint x="2680" y="2200" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="79" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;strokeWidth=2;dashed=1;opacity=25;" vertex="1" parent="1">
+                <mxCell id="79" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E8F5E9;strokeColor=#2E7D32;strokeWidth=2;dashed=1;opacity=25;" parent="1" vertex="1">
                     <mxGeometry x="1920" y="2200" width="1520" height="100" as="geometry"/>
                 </mxCell>
-                <mxCell id="80" value="处理管线：系统做什么？" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#2E7D32;" vertex="1" parent="1">
+                <mxCell id="80" value="处理管线：系统做什么？" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#2E7D32;" parent="1" vertex="1">
                     <mxGeometry x="1935" y="2205" width="250" height="25" as="geometry"/>
                 </mxCell>
-                <mxCell id="81" value="① 信息采集&lt;br&gt;抓取 RSS / 网页内容" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#1B5E20;" vertex="1" parent="1">
+                <mxCell id="81" value="① 信息采集&lt;br&gt;抓取 RSS / 网页内容" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#1B5E20;" parent="1" vertex="1">
                     <mxGeometry x="1980" y="2238" width="230" height="50" as="geometry"/>
                 </mxCell>
-                <mxCell id="82" value="② 智能排序&lt;br&gt;按用户偏好打分排序" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#1B5E20;" vertex="1" parent="1">
+                <mxCell id="82" value="② 智能排序&lt;br&gt;按用户偏好打分排序" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#1B5E20;" parent="1" vertex="1">
                     <mxGeometry x="2330" y="2238" width="230" height="50" as="geometry"/>
                 </mxCell>
-                <mxCell id="83" value="③ 内容简报&lt;br&gt;生成摘要 + 中文翻译" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#1B5E20;" vertex="1" parent="1">
+                <mxCell id="83" value="③ 内容简报&lt;br&gt;生成摘要 + 中文翻译" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#1B5E20;" parent="1" vertex="1">
                     <mxGeometry x="2680" y="2238" width="230" height="50" as="geometry"/>
                 </mxCell>
-                <mxCell id="84" value="④ 用户反馈&lt;br&gt;收集评价，优化推荐" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#1B5E20;" vertex="1" parent="1">
+                <mxCell id="84" value="④ 用户反馈&lt;br&gt;收集评价，优化推荐" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#388E3C;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#1B5E20;" parent="1" vertex="1">
                     <mxGeometry x="3030" y="2238" width="230" height="50" as="geometry"/>
                 </mxCell>
-                <mxCell id="85" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#388E3C;endFill=1;" edge="1" parent="1">
+                <mxCell id="85" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#388E3C;endFill=1;" parent="1" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2210" y="2263" as="sourcePoint"/>
                         <mxPoint x="2330" y="2263" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="86" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#388E3C;endFill=1;" edge="1" parent="1">
+                <mxCell id="86" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#388E3C;endFill=1;" parent="1" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2560" y="2263" as="sourcePoint"/>
                         <mxPoint x="2680" y="2263" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="87" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#388E3C;endFill=1;" edge="1" parent="1">
+                <mxCell id="87" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#388E3C;endFill=1;" parent="1" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2910" y="2263" as="sourcePoint"/>
                         <mxPoint x="3030" y="2263" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="88" value="" style="endArrow=block;html=1;strokeWidth=2.5;strokeColor=#546E7A;endFill=1;" edge="1" parent="1">
+                <mxCell id="88" value="" style="endArrow=block;html=1;strokeWidth=2.5;strokeColor=#546E7A;endFill=1;" parent="1" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2680" y="2300" as="sourcePoint"/>
                         <mxPoint x="2680" y="2335" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="89" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#E65100;strokeWidth=2;dashed=1;opacity=25;" vertex="1" parent="1">
+                <mxCell id="89" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#E65100;strokeWidth=2;dashed=1;opacity=25;" parent="1" vertex="1">
                     <mxGeometry x="1920" y="2335" width="1520" height="170" as="geometry"/>
                 </mxCell>
-                <mxCell id="90" value="大脑决策：怎么决策？" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#E65100;" vertex="1" parent="1">
+                <mxCell id="90" value="大脑决策：怎么决策？" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#E65100;" parent="1" vertex="1">
                     <mxGeometry x="1935" y="2340" width="250" height="25" as="geometry"/>
                 </mxCell>
-                <mxCell id="91" value="① 理解意图&lt;br&gt;分析用户需求" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#F57C00;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#BF360C;" vertex="1" parent="1">
+                <mxCell id="91" value="① 理解意图&lt;br&gt;分析用户需求" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#F57C00;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#BF360C;" parent="1" vertex="1">
                     <mxGeometry x="1940" y="2375" width="145" height="52" as="geometry"/>
                 </mxCell>
-                <mxCell id="92" value="② 制定计划&lt;br&gt;🧠 读记忆辅助决策" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#E65100;strokeWidth=3;fontSize=13;fontStyle=1;fontColor=#BF360C;" vertex="1" parent="1">
+                <mxCell id="92" value="② 制定计划&lt;br&gt;🧠 读记忆辅助决策" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#E65100;strokeWidth=3;fontSize=13;fontStyle=1;fontColor=#BF360C;" parent="1" vertex="1">
                     <mxGeometry x="2160" y="2372" width="180" height="58" as="geometry"/>
                 </mxCell>
-                <mxCell id="93" value="④ 执行任务&lt;br&gt;调度选中 Agent 干活" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#F57C00;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#BF360C;" vertex="1" parent="1">
+                <mxCell id="93" value="④ 执行任务&lt;br&gt;调度选中 Agent 干活" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#F57C00;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#BF360C;" parent="1" vertex="1">
                     <mxGeometry x="2560" y="2375" width="170" height="52" as="geometry"/>
                 </mxCell>
-                <mxCell id="94" value="⑤ 观察结果&lt;br&gt;评估质量是否合格" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#F57C00;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#BF360C;" vertex="1" parent="1">
+                <mxCell id="94" value="⑤ 观察结果&lt;br&gt;评估质量是否合格" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#F57C00;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#BF360C;" parent="1" vertex="1">
                     <mxGeometry x="2800" y="2375" width="170" height="52" as="geometry"/>
                 </mxCell>
-                <mxCell id="95" value="⑥ 决定推送&lt;br&gt;判断是否通知用户" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#F57C00;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#BF360C;" vertex="1" parent="1">
+                <mxCell id="95" value="⑥ 决定推送&lt;br&gt;判断是否通知用户" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#F57C00;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#BF360C;" parent="1" vertex="1">
                     <mxGeometry x="3040" y="2375" width="170" height="52" as="geometry"/>
                 </mxCell>
-                <mxCell id="96" value="⑦ 更新记忆&lt;br&gt;✏️ 汇总本次经验" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#F57C00;strokeWidth=2;fontSize=12;fontStyle=1;fontColor=#BF360C;" vertex="1" parent="1">
+                <mxCell id="96" value="⑦ 更新记忆&lt;br&gt;✏️ 写入 SQLite + ChromaDB" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFE0B2;strokeColor=#F57C00;strokeWidth=2;fontSize=11;fontStyle=1;fontColor=#BF360C;" parent="1" vertex="1">
                     <mxGeometry x="3280" y="2375" width="145" height="52" as="geometry"/>
                 </mxCell>
-                <mxCell id="97" value="" style="endArrow=block;html=1;strokeWidth=1.8;strokeColor=#F57C00;endFill=1;" edge="1" parent="1">
+                <mxCell id="97" value="" style="endArrow=block;html=1;strokeWidth=1.8;strokeColor=#F57C00;endFill=1;" parent="1" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2085" y="2401" as="sourcePoint"/>
                         <mxPoint x="2160" y="2401" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="98" value="" style="endArrow=block;html=1;strokeWidth=1.8;strokeColor=#F57C00;endFill=1;" edge="1" parent="1">
+                <mxCell id="98" value="" style="endArrow=block;html=1;strokeWidth=1.8;strokeColor=#F57C00;endFill=1;" parent="1" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2340" y="2401" as="sourcePoint"/>
                         <mxPoint x="2560" y="2401" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="99" value="" style="endArrow=block;html=1;strokeWidth=1.8;strokeColor=#F57C00;endFill=1;" edge="1" parent="1">
+                <mxCell id="99" value="" style="endArrow=block;html=1;strokeWidth=1.8;strokeColor=#F57C00;endFill=1;" parent="1" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2730" y="2401" as="sourcePoint"/>
                         <mxPoint x="2800" y="2401" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="100" value="" style="endArrow=block;html=1;strokeWidth=1.8;strokeColor=#F57C00;endFill=1;" edge="1" parent="1">
+                <mxCell id="100" value="" style="endArrow=block;html=1;strokeWidth=1.8;strokeColor=#F57C00;endFill=1;" parent="1" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2970" y="2401" as="sourcePoint"/>
                         <mxPoint x="3040" y="2401" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="101" value="" style="endArrow=block;html=1;strokeWidth=1.8;strokeColor=#F57C00;endFill=1;" edge="1" parent="1">
+                <mxCell id="101" value="" style="endArrow=block;html=1;strokeWidth=1.8;strokeColor=#F57C00;endFill=1;" parent="1" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="3210" y="2401" as="sourcePoint"/>
                         <mxPoint x="3280" y="2401" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="102" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#FF8F00;strokeWidth=1.5;dashed=1;opacity=50;" vertex="1" parent="1">
+                <mxCell id="102" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF8E1;strokeColor=#FF8F00;strokeWidth=1.5;dashed=1;opacity=50;" parent="1" vertex="1">
                     <mxGeometry x="2460" y="2450" width="790" height="42" as="geometry"/>
                 </mxCell>
-                <mxCell id="103" value="③ 可选子 Agent" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontStyle=1;fontColor=#E65100;" vertex="1" parent="1">
+                <mxCell id="103" value="③ 可选子 Agent" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontStyle=1;fontColor=#E65100;" parent="1" vertex="1">
                     <mxGeometry x="2441" y="2432" width="120" height="15" as="geometry"/>
                 </mxCell>
-                <mxCell id="104" value="📡 采集 Agent&lt;br&gt;抓取 RSS / 网页" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FF9800;strokeWidth=1.5;fontSize=10;fontStyle=1;fontColor=#BF360C;" vertex="1" parent="1">
+                <mxCell id="104" value="📡 采集 Agent&lt;br&gt;抓取 RSS / 网页" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FF9800;strokeWidth=1.5;fontSize=10;fontStyle=1;fontColor=#BF360C;" parent="1" vertex="1">
                     <mxGeometry x="2470" y="2457" width="155" height="30" as="geometry"/>
                 </mxCell>
-                <mxCell id="105" value="🏆 排序 Agent (📖读偏好)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FF9800;strokeWidth=1.5;fontSize=10;fontStyle=1;fontColor=#BF360C;" vertex="1" parent="1">
+                <mxCell id="105" value="🏆 排序 Agent (📖读偏好)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FF9800;strokeWidth=1.5;fontSize=10;fontStyle=1;fontColor=#BF360C;" parent="1" vertex="1">
                     <mxGeometry x="2645" y="2457" width="170" height="30" as="geometry"/>
                 </mxCell>
-                <mxCell id="106" value="📝 简报 Agent&lt;br&gt;摘要 + 中文翻译" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FF9800;strokeWidth=1.5;fontSize=10;fontStyle=1;fontColor=#BF360C;" vertex="1" parent="1">
+                <mxCell id="106" value="📝 简报 Agent&lt;br&gt;摘要 + 中文翻译" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FF9800;strokeWidth=1.5;fontSize=10;fontStyle=1;fontColor=#BF360C;" parent="1" vertex="1">
                     <mxGeometry x="2835" y="2457" width="155" height="30" as="geometry"/>
                 </mxCell>
-                <mxCell id="107" value="💬 反馈 Agent (✏️写偏好)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FF9800;strokeWidth=1.5;fontSize=10;fontStyle=1;fontColor=#BF360C;" vertex="1" parent="1">
+                <mxCell id="107" value="💬 反馈 Agent (✏️写偏好)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FFF3E0;strokeColor=#FF9800;strokeWidth=1.5;fontSize=10;fontStyle=1;fontColor=#BF360C;" parent="1" vertex="1">
                     <mxGeometry x="3010" y="2457" width="170" height="30" as="geometry"/>
                 </mxCell>
-                <mxCell id="108" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#FF8F00;dashed=1;endFill=1;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="92" target="102">
+                <mxCell id="108" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#FF8F00;dashed=1;endFill=1;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="92" target="102" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2250" y="2430" as="sourcePoint"/>
                         <mxPoint x="2205" y="2450" as="targetPoint"/>
@@ -154,13 +154,13 @@
                         </Array>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="109" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#F57C00;endFill=1;exitX=0.235;exitY=-0.01;exitDx=0;exitDy=0;exitPerimeter=0;" edge="1" parent="1" source="102">
+                <mxCell id="109" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#F57C00;endFill=1;exitX=0.235;exitY=-0.01;exitDx=0;exitDy=0;exitPerimeter=0;" parent="1" source="102" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2645" y="2457" as="sourcePoint"/>
                         <mxPoint x="2645" y="2427" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="110" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#D84315;dashed=1;endFill=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" target="92">
+                <mxCell id="110" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#D84315;dashed=1;endFill=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" target="92" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <Array as="points">
                             <mxPoint x="2885" y="2350"/>
@@ -170,89 +170,79 @@
                         <mxPoint x="2250" y="2345" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="111" value="不合格 → 重新计划 (最多3次)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=10;fontColor=#D84315;fontStyle=2;" vertex="1" parent="1">
+                <mxCell id="111" value="不合格 → 重新计划 (最多3次)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=10;fontColor=#D84315;fontStyle=2;" parent="1" vertex="1">
                     <mxGeometry x="2440" y="2335" width="200" height="18" as="geometry"/>
                 </mxCell>
-                <mxCell id="112" value="" style="endArrow=block;html=1;strokeWidth=2.5;strokeColor=#546E7A;endFill=1;" edge="1" parent="1">
+                <mxCell id="112" value="" style="endArrow=block;html=1;strokeWidth=2.5;strokeColor=#546E7A;endFill=1;" parent="1" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2680" y="2505" as="sourcePoint"/>
                         <mxPoint x="2680" y="2540" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="113" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#7B1FA2;strokeWidth=2;dashed=1;opacity=25;" vertex="1" parent="1">
-                    <mxGeometry x="1920" y="2540" width="1520" height="380" as="geometry"/>
+                <mxCell id="113" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#7B1FA2;strokeWidth=2;dashed=1;opacity=25;" parent="1" vertex="1">
+                    <mxGeometry x="1920" y="2540" width="1520" height="370" as="geometry"/>
                 </mxCell>
-                <mxCell id="114" value="记忆系统：系统记得什么？记忆如何配合大脑？" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#7B1FA2;" vertex="1" parent="1">
-                    <mxGeometry x="1935" y="2545" width="420" height="25" as="geometry"/>
+                <mxCell id="114" value="记忆系统：两层架构（情节记忆 + 长期记忆） — 每次执行直接写入" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#7B1FA2;" parent="1" vertex="1">
+                    <mxGeometry x="1935" y="2545" width="520" height="25" as="geometry"/>
                 </mxCell>
-                <mxCell id="115" value="🧠 短期记忆 (deque)&lt;br&gt;当前会话上下文&lt;br&gt;最近 15 轮执行记录" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#8E24AA;strokeWidth=1.5;fontSize=11;fontStyle=1;fontColor=#4A148C;align=center;" vertex="1" parent="1">
-                    <mxGeometry x="1960" y="2614" width="230" height="58" as="geometry"/>
+                <mxCell id="117" value="📝 情节记忆 (SQLite)&lt;br&gt;每次执行的完整审计日志&lt;br&gt;planner 检索近7天记录" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#8E24AA;strokeWidth=2;fontSize=12;fontStyle=1;fontColor=#4A148C;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="1990" y="2610" width="290" height="65" as="geometry"/>
                 </mxCell>
-                <mxCell id="116" value="📚 长期记忆 (ChromaDB)&lt;br&gt;LLM 压缩的历史经验&lt;br&gt;向量检索匹配相似场景" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#8E24AA;strokeWidth=1.5;fontSize=11;fontStyle=1;fontColor=#4A148C;align=center;" vertex="1" parent="1">
-                    <mxGeometry x="2300" y="2614" width="230" height="58" as="geometry"/>
+                <mxCell id="116" value="📚 长期记忆 (ChromaDB)&lt;br&gt;每次执行后 LLM 摘要直接写入&lt;br&gt;语义检索匹配历史类似场景" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#8E24AA;strokeWidth=2;fontSize=12;fontStyle=1;fontColor=#4A148C;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="2430" y="2610" width="290" height="65" as="geometry"/>
                 </mxCell>
-                <mxCell id="117" value="📝 情节记忆 (SQLite)&lt;br&gt;可审计的执行日志&lt;br&gt;每条操作记录时间+状态" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E1BEE7;strokeColor=#8E24AA;strokeWidth=1.5;fontSize=11;fontStyle=1;fontColor=#4A148C;align=center;" vertex="1" parent="1">
-                    <mxGeometry x="2640" y="2612" width="230" height="58" as="geometry"/>
+                <mxCell id="118" value="⭐ 用户偏好 (ChromaDB)&lt;br&gt;v_like / v_dislike 向量&lt;br&gt;排序 Agent 的评分依据" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#AB47BC;strokeWidth=1.5;fontSize=12;fontStyle=1;fontColor=#6A1B9A;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="2950" y="2610" width="290" height="65" as="geometry"/>
                 </mxCell>
-                <mxCell id="118" value="⭐ 用户偏好 (ChromaDB)&lt;br&gt;v_like / v_dislike 向量&lt;br&gt;排序 Agent 的评分依据" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#F3E5F5;strokeColor=#AB47BC;strokeWidth=1.5;fontSize=11;fontStyle=1;fontColor=#6A1B9A;align=center;" vertex="1" parent="1">
-                    <mxGeometry x="2980" y="2612" width="230" height="58" as="geometry"/>
+                <mxCell id="119" value="每次执行 → LLM 摘要 200 字 → 直接写入 ChromaDB 长期记忆（不再等待 15 轮压缩窗口）" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE7F6;strokeColor=#7B1FA2;strokeWidth=1;fontSize=10;fontColor=#7B1FA2;fontStyle=2;align=center;" parent="1" vertex="1">
+                    <mxGeometry x="1980" y="2785" width="540" height="20" as="geometry"/>
                 </mxCell>
-                <mxCell id="119" value="短→长压缩：窗口满15条 → LLM 压缩为200字摘要 → 存入 ChromaDB 长期记忆" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#EDE7F6;strokeColor=#7B1FA2;strokeWidth=1;fontSize=10;fontColor=#7B1FA2;fontStyle=2;align=center;" vertex="1" parent="1">
-                    <mxGeometry x="1950" y="2770" width="480" height="20" as="geometry"/>
-                </mxCell>
-                <mxCell id="120" value="" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#7B1FA2;dashed=1;endFill=1;exitX=1;exitY=0.5;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="115" target="116">
-                    <mxGeometry width="50" height="50" relative="1" as="geometry">
-                        <mxPoint x="2190" y="2611" as="sourcePoint"/>
-                        <mxPoint x="2300" y="2611" as="targetPoint"/>
-                    </mxGeometry>
-                </mxCell>
-                <mxCell id="121" value="&lt;b style=&quot;color:#8E24AA;&quot;&gt;📖 读：最近3条执行记录&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=2;strokeColor=#8E24AA;endFill=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="115" target="92">
+                <mxCell id="121" value="&lt;b style=&quot;color:#8E24AA;&quot;&gt;📖 读：近7天执行记录&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=2;strokeColor=#8E24AA;endFill=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="117" target="92" edge="1">
                     <mxGeometry x="-0.6731" y="-9" width="50" height="50" relative="1" as="geometry">
                         <mxPoint as="offset"/>
-                        <mxPoint x="2075" y="2582" as="sourcePoint"/>
+                        <mxPoint x="2135" y="2582" as="sourcePoint"/>
                         <mxPoint x="2250" y="2430" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="122" value="&lt;b style=&quot;color:#8E24AA;&quot;&gt;📖 读：向量检索匹配历史经验&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=2;strokeColor=#8E24AA;endFill=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="116" target="92">
+                <mxCell id="122" value="&lt;b style=&quot;color:#8E24AA;&quot;&gt;📖 读：语义检索历史经验&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=2;strokeColor=#8E24AA;endFill=1;exitX=0.5;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="116" target="92" edge="1">
                     <mxGeometry x="-0.6061" y="3" width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="-1" as="offset"/>
-                        <mxPoint x="2415" y="2582" as="sourcePoint"/>
+                        <mxPoint x="2575" y="2582" as="sourcePoint"/>
                         <mxPoint x="2250" y="2430" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="123" value="&lt;b style=&quot;color:#8E24AA;&quot;&gt;✏️ 写短期&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#8E24AA;dashed=1;endFill=1;exitX=0.75;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="96">
+                <mxCell id="124" value="&lt;b style=&quot;color:#8E24AA;&quot;&gt;✏️ 写：执行日志&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=2;strokeColor=#8E24AA;endFill=1;exitX=0.75;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="96" target="117" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <Array as="points">
                             <mxPoint x="3390" y="2740"/>
-                            <mxPoint x="2075" y="2740"/>
+                            <mxPoint x="2135" y="2740"/>
                         </Array>
                         <mxPoint x="3323" y="2427" as="sourcePoint"/>
-                        <mxPoint x="2075" y="2670" as="targetPoint"/>
+                        <mxPoint x="2135" y="2582" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="124" value="&lt;b style=&quot;color:#8E24AA;&quot;&gt;✏️ 写情节日志&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#8E24AA;dashed=1;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="96" target="117">
+                <mxCell id="201" value="&lt;b style=&quot;color:#8E24AA;&quot;&gt;✏️ 写：LLM 摘要&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=2;strokeColor=#8E24AA;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="96" target="116" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <Array as="points">
-                            <mxPoint x="3352" y="2720"/>
-                            <mxPoint x="3060" y="2720"/>
-                            <mxPoint x="2755" y="2720"/>
+                            <mxPoint x="3350" y="2720"/>
+                            <mxPoint x="2575" y="2720"/>
                         </Array>
                         <mxPoint x="3323" y="2427" as="sourcePoint"/>
-                        <mxPoint x="2755" y="2582" as="targetPoint"/>
+                        <mxPoint x="2575" y="2582" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="125" value="&lt;b style=&quot;color:#AB47BC;&quot;&gt;📖 读偏好&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#D84315;dashed=1;endFill=1;exitX=0.25;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" edge="1" parent="1" source="118" target="105">
+                <mxCell id="125" value="&lt;b style=&quot;color:#AB47BC;&quot;&gt;📖 读偏好&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#D84315;dashed=1;endFill=1;exitX=0.25;exitY=0;exitDx=0;exitDy=0;entryX=0.5;entryY=1;entryDx=0;entryDy=0;" parent="1" source="118" target="105" edge="1">
                     <mxGeometry x="0.6783" width="50" height="50" relative="1" as="geometry">
                         <mxPoint as="offset"/>
                         <Array as="points">
-                            <mxPoint x="3038" y="2520"/>
+                            <mxPoint x="3023" y="2520"/>
                             <mxPoint x="2730" y="2520"/>
                         </Array>
                         <mxPoint x="3095" y="2582" as="sourcePoint"/>
                         <mxPoint x="2305" y="2487" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="126" value="&lt;b style=&quot;color:#AB47BC;&quot;&gt;✏️ 写偏好&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#D84315;dashed=1;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" edge="1" parent="1" source="107" target="118">
+                <mxCell id="126" value="&lt;b style=&quot;color:#AB47BC;&quot;&gt;✏️ 写偏好&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#D84315;dashed=1;endFill=1;exitX=0.5;exitY=1;exitDx=0;exitDy=0;entryX=0.5;entryY=0;entryDx=0;entryDy=0;" parent="1" source="107" target="118" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <Array as="points">
                             <mxPoint x="3095" y="2560"/>
@@ -261,7 +251,7 @@
                         <mxPoint x="3095" y="2582" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="127" value="&lt;b style=&quot;color:#AB47BC;&quot;&gt;✏️ 隐式偏好&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#AB47BC;dashed=1;endFill=1;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" edge="1" parent="1" source="96" target="118">
+                <mxCell id="127" value="&lt;b style=&quot;color:#AB47BC;&quot;&gt;✏️ 隐式偏好&lt;/b&gt;" style="endArrow=block;html=1;strokeWidth=1.5;strokeColor=#AB47BC;dashed=1;endFill=1;exitX=0.25;exitY=1;exitDx=0;exitDy=0;entryX=1;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="96" target="118" edge="1">
                     <mxGeometry x="0.6933" width="50" height="50" relative="1" as="geometry">
                         <mxPoint as="offset"/>
                         <Array as="points">
@@ -271,47 +261,41 @@
                         <mxPoint x="3210" y="2611" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="128" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#607D8B;strokeWidth=2;dashed=1;opacity=25;" vertex="1" parent="1">
-                    <mxGeometry x="1950" y="2812" width="1070" height="85" as="geometry"/>
+                <mxCell id="128" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ECEFF1;strokeColor=#607D8B;strokeWidth=2;dashed=1;opacity=25;" parent="1" vertex="1">
+                    <mxGeometry x="1950" y="2825" width="650" height="65" as="geometry"/>
                 </mxCell>
-                <mxCell id="129" value="记忆交互图例" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#546E7A;" vertex="1" parent="1">
-                    <mxGeometry x="1969" y="2817" width="150" height="25" as="geometry"/>
+                <mxCell id="129" value="记忆交互图例" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#546E7A;" parent="1" vertex="1">
+                    <mxGeometry x="1969" y="2830" width="150" height="25" as="geometry"/>
                 </mxCell>
-                <mxCell id="130" value="📖 实线紫箭头 = &lt;b&gt;读取记忆&lt;/b&gt;：planner 从短期/长期记忆检索历史经验，注入 prompt 辅助决策" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontColor=#4A148C;" vertex="1" parent="1">
-                    <mxGeometry x="1984" y="2844" width="690" height="22" as="geometry"/>
+                <mxCell id="130" value="📖 实线紫箭头 = &lt;b&gt;读取记忆&lt;/b&gt;：planner 从情节记忆(SQLite近7天) + 长期记忆(ChromaDB语义)检索，注入 prompt 辅助决策" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontColor=#4A148C;" parent="1" vertex="1">
+                    <mxGeometry x="1984" y="2855" width="750" height="22" as="geometry"/>
                 </mxCell>
-                <mxCell id="131" value="✏️ 虚线紫箭头 = &lt;b&gt;写入记忆&lt;/b&gt;：update_memory 节点将执行经验同时存入短期 + 情节 + (压缩后)长期" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontColor=#4A148C;" vertex="1" parent="1">
-                    <mxGeometry x="1984" y="2868" width="690" height="22" as="geometry"/>
+                <mxCell id="131" value="✏️ 实线紫箭头 = &lt;b&gt;写入记忆&lt;/b&gt;：update_memory 每次执行后同时写入 SQLite 执行日志 + LLM 摘要写入 ChromaDB 长期记忆" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontColor=#4A148C;" parent="1" vertex="1">
+                    <mxGeometry x="1984" y="2866" width="750" height="22" as="geometry"/>
                 </mxCell>
-                <mxCell id="132" value="⭐ 虚线橙箭头 = &lt;b&gt;偏好读写&lt;/b&gt;：排序Agent读偏好向量打分；反馈Agent/update_memory写偏好向量优化" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontColor=#6A1B9A;" vertex="1" parent="1">
-                    <mxGeometry x="2493" y="2842" width="720" height="22" as="geometry"/>
-                </mxCell>
-                <mxCell id="133" value="↔️ 紫色虚线 = &lt;b&gt;记忆压缩&lt;/b&gt;：短期记忆满15条后，LLM压缩为200字摘要存入长期记忆 ChromaDB" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontColor=#7B1FA2;" vertex="1" parent="1">
-                    <mxGeometry x="2493" y="2866" width="720" height="22" as="geometry"/>
-                </mxCell>
-                <mxCell id="134" value="" style="endArrow=block;html=1;strokeWidth=2.5;strokeColor=#546E7A;endFill=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" parent="1" source="113" target="135">
+                <mxCell id="134" value="" style="endArrow=block;html=1;strokeWidth=2.5;strokeColor=#546E7A;endFill=1;entryX=0.5;entryY=0;entryDx=0;entryDy=0;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" parent="1" source="113" target="135" edge="1">
                     <mxGeometry width="50" height="50" relative="1" as="geometry">
                         <mxPoint x="2680" y="2950" as="sourcePoint"/>
                         <mxPoint x="2680" y="2952" as="targetPoint"/>
                     </mxGeometry>
                 </mxCell>
-                <mxCell id="135" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F7FA;strokeColor=#00695C;strokeWidth=2;dashed=1;opacity=25;" vertex="1" parent="1">
-                    <mxGeometry x="1920" y="2968" width="1520" height="90" as="geometry"/>
+                <mxCell id="135" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#E0F7FA;strokeColor=#00695C;strokeWidth=2;dashed=1;opacity=25;" parent="1" vertex="1">
+                    <mxGeometry x="1920" y="2955" width="1520" height="90" as="geometry"/>
                 </mxCell>
-                <mxCell id="136" value="输出：用户看到什么？" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#00695C;" vertex="1" parent="1">
-                    <mxGeometry x="1935" y="2973" width="250" height="25" as="geometry"/>
+                <mxCell id="136" value="输出：用户看到什么？" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#00695C;" parent="1" vertex="1">
+                    <mxGeometry x="1935" y="2960" width="250" height="25" as="geometry"/>
                 </mxCell>
-                <mxCell id="137" value="📊 信息仪表盘&lt;br&gt;查看所有内容摘要" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00796B;strokeWidth=1.5;fontSize=13;fontStyle=1;fontColor=#004D40;" vertex="1" parent="1">
-                    <mxGeometry x="2000" y="3006" width="300" height="42" as="geometry"/>
+                <mxCell id="137" value="📊 信息仪表盘&lt;br&gt;查看所有内容摘要" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00796B;strokeWidth=1.5;fontSize=13;fontStyle=1;fontColor=#004D40;" parent="1" vertex="1">
+                    <mxGeometry x="2000" y="2993" width="300" height="42" as="geometry"/>
                 </mxCell>
-                <mxCell id="138" value="🔔 推送通知&lt;br&gt;高价值内容实时提醒" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00796B;strokeWidth=1.5;fontSize=13;fontStyle=1;fontColor=#004D40;" vertex="1" parent="1">
-                    <mxGeometry x="2530" y="3006" width="300" height="42" as="geometry"/>
+                <mxCell id="138" value="🔔 推送通知&lt;br&gt;高价值内容实时提醒" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00796B;strokeWidth=1.5;fontSize=13;fontStyle=1;fontColor=#004D40;" parent="1" vertex="1">
+                    <mxGeometry x="2530" y="2993" width="300" height="42" as="geometry"/>
                 </mxCell>
-                <mxCell id="139" value="📋 历史回顾&lt;br&gt;查看过去的内容记录" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00796B;strokeWidth=1.5;fontSize=13;fontStyle=1;fontColor=#004D40;" vertex="1" parent="1">
-                    <mxGeometry x="3060" y="3006" width="300" height="42" as="geometry"/>
+                <mxCell id="139" value="📋 历史回顾&lt;br&gt;查看过去的内容记录" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#B2DFDB;strokeColor=#00796B;strokeWidth=1.5;fontSize=13;fontStyle=1;fontColor=#004D40;" parent="1" vertex="1">
+                    <mxGeometry x="3060" y="2993" width="300" height="42" as="geometry"/>
                 </mxCell>
-                <mxCell id="140" value="一句话总结：FeedLens Agent 是一个 AI 信息管家 —— 大脑(planner)读取记忆辅助决策 → 调度子Agent执行 → update_memory 将经验写回三层记忆 → 短期满则LLM压缩入长期 → 形成「越用越聪明」的正向循环" style="text;html=1;strokeColor=#37474F;fillColor=#ECEFF1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=12;fontStyle=2;fontColor=#37474F;rounded=1;strokeWidth=1;" vertex="1" parent="1">
-                    <mxGeometry x="1960" y="3073" width="1440" height="28" as="geometry"/>
+                <mxCell id="140" value="&lt;span style=&quot;font-family: -apple-system, BlinkMacSystemFont, &amp;quot;Segoe UI&amp;quot;, Roboto, sans-serif; font-size: 13px; font-style: normal; text-align: start;&quot;&gt;&lt;font style=&quot;color: rgb(26, 26, 26);&quot;&gt;FeedLens Agent 是一个 AI 信息管家 &lt;br&gt;大脑(planner)检索近7天执行记录（情节/SQLite）+ 语义匹配历史经验（长期/ChromaDB）辅助决策 → 调度子Agent执行 → 完成后同时写入 SQLite + ChromaDB → 每次执行直接 LLM 摘要写入长期记忆 → 形成「越用越聪明」的正向循环&lt;/font&gt;&lt;/span&gt;" style="text;html=1;strokeColor=#37474F;fillColor=#ECEFF1;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=12;fontStyle=2;fontColor=#37474F;rounded=1;strokeWidth=1;" parent="1" vertex="1">
+                    <mxGeometry x="1960" y="3058" width="1440" height="52" as="geometry"/>
                 </mxCell>
             </root>
         </mxGraphModel>

@@ -91,8 +91,8 @@ PLANNER_SYSTEM_PROMPT = """你是 FeedLens 的编排 Planner。根据当前 Agen
 ## 历史经验参考
 
 上下文中可能包含 memory 字段：
-- memory.recent_turns: 最近几轮的本会话执行记录
-- memory.relevant_history: 过往类似情况的处理经验（可能为空）
+- memory.recent_executions: 近7天执行记录（含每次采集量、排序质量、决策和结果）
+- memory.relevant_history: ChromaDB 语义检索的过往类似场景处理经验（可能为空）
 
 若历史经验显示某策略在类似状态下有效或无效，优先参考；若 memory 为空或当前状态与历史差异明显，以当前数据为准决策。
 
@@ -240,24 +240,46 @@ def planner_node(state: FeedLensState) -> dict:
 
 
 def _build_planner_context(state: FeedLensState) -> dict:
-    """构建 planner 的 LLM 输入上下文。"""
+    """构建 planner 的 LLM 输入上下文。
+
+    FeedLens 场景适配：
+      - 情节记忆（SQLite）：检索近7天执行记录，供 planner 回顾近期采集/排序/简报效果
+      - 长期记忆（ChromaDB）：语义检索历史类似场景的执行经验
+    """
     obs = state.get("observation_result", {})
     ranking_detail = state.get("ranking_detail", {})
     collected = state.get("collected_items", [])
     top_score = ranking_detail.get("top_score", 0)
     brief_quality = state.get("brief_quality", 0)
 
-    # 记忆检索：用当前状态摘要作为 query，召回相关历史经验（P0）
+    # 记忆检索：情节记忆（近N天执行记录）+ 长期记忆（语义检索历史经验）
     memory_query = f"采集{len(collected)}条 排序top{top_score:.2f} 简报质量{brief_quality:.2f}"
     try:
-        memory_ctx = get_context(query=memory_query, n_recent=3, n_long_term=3)
+        memory_ctx = get_context(query=memory_query, n_episodic=10, n_long_term=3, lookback_days=7)
+        _episodic = memory_ctx.get("episodic", [])
+        _long_term = memory_ctx.get("long_term", [])
+        print(f"[planner] memory: 情节(近7天)={len(_episodic)}条 长期(语义)={len(_long_term)}条", flush=True)
+
+        # 情节记忆：提取执行摘要信息
+        recent_executions = []
+        for log in _episodic:
+            meta = log.get("metadata", {})
+            recent_executions.append({
+                "session_id": log.get("session_id", ""),
+                "created_at": log.get("created_at", ""),
+                "situation": meta.get("situation", ""),
+                "decision": meta.get("decision", []),
+                "outcome": meta.get("outcome", ""),
+                "trigger": meta.get("trigger", ""),
+            })
+
         memory_block = {
-            "recent_turns": memory_ctx.get("short_term", []),
-            "relevant_history": [m.get("document", "") for m in memory_ctx.get("long_term", [])],
+            "recent_executions": recent_executions,
+            "relevant_history": [m.get("document", "") for m in _long_term],
         }
     except Exception as e:
         print(f"[planner] 记忆检索失败，降级为空: {e}", flush=True)
-        memory_block = {"recent_turns": [], "relevant_history": []}
+        memory_block = {"recent_executions": [], "relevant_history": []}
 
     return {
         "trigger": state.get("trigger_type", "daily_briefing"),
@@ -552,10 +574,12 @@ def push_notification_node(state: FeedLensState) -> dict:
 
 
 def update_memory_node(state: FeedLensState) -> dict:
-    """更新偏好 + 写入执行日志。
+    """更新偏好 + 写入执行日志 + 摘要写入长期记忆。
 
-    1. 如果有新的 ranked_items，更新 ChromaDB 偏好向量
-    2. 写入 execution_logs 表
+    FeedLens 场景适配：
+      1. 写入情节记忆（SQLite execution_logs）
+      2. LLM 摘要本次执行 → 写入长期记忆（ChromaDB）
+      3. 写入 run_logs / briefs / 偏好向量
 
     Returns:
         execution_log: 执行日志
@@ -568,25 +592,45 @@ def update_memory_node(state: FeedLensState) -> dict:
     coordinator_obs = state.get("coordinator_observation", {})
     planner_reason = state.get("planner_reason", "")
     react_cycle = state.get("react_cycle_count", 0)
+    trigger_type = state.get("trigger_type", "daily_briefing")
 
     print(f"[update_memory] 更新记忆: user_id={user_id}", flush=True)
-    # 写入本轮 planner 决策经验到记忆系统（供后续 planner 检索，P0）
+
+    # 构建执行结果摘要（供记忆系统使用）
+    collected_count = len(state.get("collected_items", []))
+    ranked_count = len(ranked_items)
+    brief_quality_val = state.get("brief_quality", 0.0)
+
+    execution_result = {
+        "collected_count": collected_count,
+        "ranked_count": ranked_count,
+        "brief_quality": brief_quality_val,
+        "trigger_type": trigger_type,
+        "react_cycle_count": react_cycle,
+        "push_status": state.get("push_status", "pending"),
+    }
+
+    # 写入本轮 planner 决策经验到记忆系统（情节记忆 + 长期记忆）
     try:
         obs = state.get("observation_result", {})
+        planner_decision = state.get("sub_agent_plan", [])
         add_memory(
             session_id=session_id,
             event="planner_decision",
             node_name="planner",
             content={
-                "situation": f"采集{len(state.get('collected_items', []))} 排序top{state.get('ranking_detail', {}).get('top_score', 0):.2f} 简报质量{state.get('brief_quality', 0):.2f}",
-                "decision": state.get("sub_agent_plan", []),
+                "situation": f"采集{collected_count}条 排序top{state.get('ranking_detail', {}).get('top_score', 0):.2f} 简报质量{brief_quality_val:.2f}",
+                "decision": planner_decision,
                 "reason": planner_reason,
                 "outcome": "retry_needed" if obs.get("needs_retry") else "ok",
-                "trigger": state.get("trigger_type", ""),
+                "trigger": trigger_type,
             },
             status="completed",
+            execution_result=execution_result,
+            planner_decision={"sub_agent_plan": planner_decision, "reason": planner_reason},
+            trigger_type=trigger_type,
         )
-        print(f"[update_memory] planner 决策经验已写入记忆系统", flush=True)
+        print(f"[update_memory] planner 决策经验已写入记忆系统（SQLite + ChromaDB）", flush=True)
     except Exception as e:
         print(f"[update_memory] 决策经验写入失败: {e}", flush=True)
 

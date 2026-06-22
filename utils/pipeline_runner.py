@@ -5,6 +5,7 @@ import os
 import uuid
 from datetime import datetime
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from utils.execution_fence import try_acquire_pipeline
 
 

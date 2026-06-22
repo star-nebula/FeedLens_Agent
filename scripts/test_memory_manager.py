@@ -1,5 +1,11 @@
 ﻿"""
-记忆管理模块测试脚本
+记忆管理模块测试脚本（FeedLens 场景适配版）
+
+架构变更：
+  - 删除 ShortTermMemory（FeedLens 每次独立执行，不存在同进程多轮积累）
+  - 情节记忆：SQLite execution_logs，增加 get_recent_days_logs() 近N天检索
+  - 长期记忆：ChromaDB，每次执行后 LLM 摘要直接写入，不再等15轮压缩
+  - get_context()：整合 SQLite 近N天 + ChromaDB 语义检索
 """
 
 import sys
@@ -11,61 +17,24 @@ sys.stdout.reconfigure(encoding='utf-8')
 sys.stderr.reconfigure(encoding='utf-8')
 
 from utils.memory_manager import (
-    ShortTermMemory,
-    LongTermMemory,
     EpisodicMemory,
+    LongTermMemory,
     MemoryManager,
-    SHORT_TERM_WINDOW_SIZE,
+    EPISODIC_LOOKBACK_DAYS,
     get_memory_manager,
     add_memory,
     get_context,
+    summarize_execution,
 )
 
 
-def test_short_term_memory():
-    print("\n[test] ShortTermMemory - 滑动窗口")
-    stm = ShortTermMemory(window_size=5)
+# ============================================================
+# 情节记忆测试
+# ============================================================
 
-    # 添加记忆
-    for i in range(7):
-        stm.add({"event": f"test_event_{i}", "node_name": "test_node"})
-
-    # 窗口大小应为 5
-    assert stm.size() == 5, f"期望 5，实际 {stm.size()}"
-
-    # 最早的两条应该被丢弃
-    all_entries = stm.get_all()
-    assert all_entries[0]["event"] == "test_event_2", f"期望 test_event_2，实际 {all_entries[0]['event']}"
-    assert all_entries[-1]["event"] == "test_event_6"
-
-    # 检查溢出
-    assert stm.is_overflow() == True
-
-    # 清空
-    stm.clear()
-    assert stm.size() == 0
-
-    print("  [PASS] 滑动窗口正确工作")
-
-
-def test_short_term_get_recent():
-    print("\n[test] ShortTermMemory - get_recent")
-    stm = ShortTermMemory(window_size=10)
-
-    for i in range(10):
-        stm.add({"event": f"event_{i}"})
-
-    recent = stm.get_recent(3)
-    assert len(recent) == 3
-    assert recent[0]["event"] == "event_7"
-    assert recent[1]["event"] == "event_8"
-    assert recent[2]["event"] == "event_9"
-
-    print("  [PASS] get_recent 返回最近 3 条")
-
-
-def test_episodic_memory():
-    print("\n[test] EpisodicMemory - SQLite 写入")
+def test_episodic_write():
+    """测试情节记忆写入（turn 固定为 1）。"""
+    print("\n[test] EpisodicMemory - 写入")
     with unittest.mock.patch("utils.memory_manager.Database") as MockDB:
         mock_conn = unittest.mock.MagicMock()
         mock_cursor = unittest.mock.MagicMock()
@@ -80,157 +49,198 @@ def test_episodic_memory():
         em = EpisodicMemory("test.db")
         log_id = em.write(
             session_id="test_session",
-            turn=1,
-            event="test_event",
-            node_name="test_node",
+            event="planner_decision",
+            node_name="planner",
             status="completed",
             duration_ms=100,
-            metadata={"key": "value"},
+            metadata={"situation": "采集10条", "outcome": "ok"},
         )
 
     assert log_id == 123
-    print("  [PASS] 情节记忆写入成功")
+    print("  [PASS] 情节记忆写入成功 (turn=1)")
 
 
-def test_long_term_memory():
-    print("\n[test] LongTermMemory - ChromaDB 写入")
-    with unittest.mock.patch("utils.memory_manager.VectorStore") as MockVS:
-        mock_collection = unittest.mock.MagicMock()
-        mock_vs = unittest.mock.MagicMock()
-        mock_vs.client.get_or_create_collection.return_value = mock_collection
-        MockVS.return_value = mock_vs
+def test_episodic_get_recent_days():
+    """测试近N天执行记录检索。"""
+    print("\n[test] EpisodicMemory - 近N天检索")
+    mock_row1 = {
+        "id": 1, "session_id": "s1", "event": "planner_decision",
+        "node_name": "planner", "status": "completed",
+        "duration_ms": 100,
+        "metadata": '{"situation":"采集10条","outcome":"ok"}',
+        "created_at": "2026-06-22 10:00:00",
+    }
+    mock_row2 = {
+        "id": 2, "session_id": "s2", "event": "planner_decision",
+        "node_name": "planner", "status": "completed",
+        "duration_ms": 200,
+        "metadata": '{"situation":"采集3条","outcome":"retry_needed"}',
+        "created_at": "2026-06-21 10:00:00",
+    }
 
-        ltm = LongTermMemory("test_chroma")
-        doc_id = ltm.add_compressed("测试压缩记忆", metadata={"source": "test"})
+    with unittest.mock.patch("utils.memory_manager.Database") as MockDB:
+        mock_conn = unittest.mock.MagicMock()
+        mock_conn.execute.return_value.fetchall.return_value = [mock_row1, mock_row2]
+        mock_db = unittest.mock.MagicMock()
+        mock_db.get_connection.return_value.__enter__ = unittest.mock.MagicMock(return_value=mock_conn)
+        mock_db.get_connection.return_value.__exit__ = unittest.mock.MagicMock(return_value=None)
+        MockDB.return_value = mock_db
+
+        em = EpisodicMemory("test.db")
+        logs = em.get_recent_days_logs(days=7, limit=10)
+
+    assert len(logs) == 2
+    assert logs[0]["session_id"] == "s1"
+    assert isinstance(logs[0]["metadata"], dict)  # JSON 已解析
+    assert logs[0]["metadata"]["outcome"] == "ok"
+    print("  [PASS] 近7天检索返回 2 条，metadata 已解析")
+
+
+# ============================================================
+# 长期记忆测试
+# ============================================================
+
+def test_long_term_summarize_and_store():
+    """测试 LLM 摘要 + ChromaDB 写入。"""
+    print("\n[test] LongTermMemory - summarize_and_store")
+    mock_collection = unittest.mock.MagicMock()
+    mock_vs = unittest.mock.MagicMock()
+    mock_vs.client.get_or_create_collection.return_value = mock_collection
+
+    mock_llm = unittest.mock.MagicMock()
+    mock_llm.chat.return_value = {"content": "本次执行：采集10条，排序质量0.8，简报质量0.9"}
+
+    with unittest.mock.patch("utils.memory_manager.VectorStore", return_value=mock_vs):
+        with unittest.mock.patch("utils.llm_provider.DeepSeekProvider", return_value=mock_llm):
+            with unittest.mock.patch("utils.memory_manager.load_config", return_value={
+                "llm": {"deepseek": {"api_key": "mock_key", "model": "mock-model"}}
+            }):
+                ltm = LongTermMemory("test_chroma")
+                doc_id = ltm.summarize_and_store(
+                    session_id="test_session_001",
+                    planner_decision={"sub_agent_plan": [{"agent": "Collection"}]},
+                    execution_result={"collected_count": 10, "brief_quality": 0.9},
+                    trigger_type="manual",
+                )
 
     assert doc_id.startswith("memory_")
-    print(f"  [PASS] 长期记忆写入成功: {doc_id}")
+    print(f"  [PASS] 摘要写入成功: {doc_id}")
+
+
+def test_long_term_summarize_fallback():
+    """测试 LLM 不可用时的降级。"""
+    print("\n[test] LongTermMemory - summarize_and_store (降级)")
+    mock_collection = unittest.mock.MagicMock()
+    mock_vs = unittest.mock.MagicMock()
+    mock_vs.client.get_or_create_collection.return_value = mock_collection
+
+    with unittest.mock.patch("utils.memory_manager.VectorStore", return_value=mock_vs):
+        with unittest.mock.patch("utils.llm_provider.DeepSeekProvider") as MockLLM:
+            MockLLM.side_effect = Exception("LLM 不可用")
+            with unittest.mock.patch("utils.memory_manager.load_config", return_value={
+                "llm": {"deepseek": {"api_key": "mock_key", "model": "mock-model"}}
+            }):
+                ltm = LongTermMemory("test_chroma")
+                doc_id = ltm.summarize_and_store(
+                    session_id="test_session_002",
+                    planner_decision={"sub_agent_plan": []},
+                    execution_result={"collected_count": 5, "ranked_count": 3, "brief_quality": 0.6},
+                    trigger_type="daily_briefing",
+                )
+
+    assert doc_id.startswith("memory_")
+    print("  [PASS] LLM 不可用时降级成功（结构化拼接）")
 
 
 def test_long_term_search():
-    print("\n[test] LongTermMemory - 检索")
-    with unittest.mock.patch("utils.memory_manager.VectorStore") as MockVS:
-        mock_collection = unittest.mock.MagicMock()
-        mock_collection.query.return_value = {
-            "ids": [["memory_001", "memory_002"]],
-            "documents": [["记忆1", "记忆2"]],
-            "metadatas": [[{"type": "compressed_memory"}, {"type": "compressed_memory"}]],
-            "distances": [[0.1, 0.2]],
-        }
-        mock_vs = unittest.mock.MagicMock()
-        mock_vs.client.get_or_create_collection.return_value = mock_collection
-        MockVS.return_value = mock_vs
+    """测试 ChromaDB 语义检索。"""
+    print("\n[test] LongTermMemory - search")
+    mock_collection = unittest.mock.MagicMock()
+    mock_collection.query.return_value = {
+        "ids": [["memory_001", "memory_002"]],
+        "documents": [["采集10条简报质量0.9", "采集3条简报质量0.4"]],
+        "metadatas": [[{"type": "execution_summary"}, {"type": "execution_summary"}]],
+        "distances": [[0.1, 0.5]],
+    }
+    mock_vs = unittest.mock.MagicMock()
+    mock_vs.client.get_or_create_collection.return_value = mock_collection
 
+    with unittest.mock.patch("utils.memory_manager.VectorStore", return_value=mock_vs):
         ltm = LongTermMemory("test_chroma")
-        results = ltm.search("测试查询", n_results=2)
+        results = ltm.search("采集 排序 简报质量", n_results=2)
 
     assert len(results) == 2
     assert results[0]["id"] == "memory_001"
-    print("  [PASS] 长期记忆检索成功")
+    print("  [PASS] 语义检索返回 2 条")
 
+
+# ============================================================
+# 记忆管理器测试
+# ============================================================
 
 def test_memory_manager_add():
+    """测试 add_memory：情节记忆 + 长期记忆同时写入。"""
     print("\n[test] MemoryManager - add_memory")
-    with unittest.mock.patch("utils.memory_manager.ShortTermMemory") as MockSTM:
-        with unittest.mock.patch("utils.memory_manager.EpisodicMemory") as MockEM:
-            with unittest.mock.patch("utils.memory_manager.LongTermMemory") as MockLTM:
-                mock_stm = unittest.mock.MagicMock()
-                mock_stm.size.return_value = 1
-                mock_stm.is_overflow.return_value = False
-                MockSTM.return_value = mock_stm
-
-                mock_em = unittest.mock.MagicMock()
-                mock_em.write.return_value = 100
-                MockEM.return_value = mock_em
-
-                mock_ltm = unittest.mock.MagicMock()
-                MockLTM.return_value = mock_ltm
-
-                mm = MemoryManager()
-                result = mm.add_memory(
-                    session_id="test_session",
-                    event="test_event",
-                    node_name="test_node",
-                    content={"key": "value"},
-                )
-
-    assert result["turn"] == 2  # size + 1
-    assert result["log_id"] == 100
-    print("  [PASS] MemoryManager.add_memory 成功")
-
-
-def test_memory_manager_compress():
-    print("\n[test] MemoryManager - compress_window")
-    mock_stm = unittest.mock.MagicMock()
-    mock_stm.get_all.return_value = [
-        {"turn": 1, "node_name": "node1", "content": {"a": 1}},
-        {"turn": 2, "node_name": "node2", "content": {"b": 2}},
-    ]
-    mock_stm.is_overflow.return_value = True
-
-    mock_ltm = unittest.mock.MagicMock()
-    mock_ltm.add_compressed.return_value = "memory_compressed"
-
-    mock_llm = unittest.mock.MagicMock()
-    mock_llm.chat.return_value = {"content": "压缩后的摘要"}
-
-    with unittest.mock.patch("utils.llm_provider.DeepSeekProvider", return_value=mock_llm):
-        with unittest.mock.patch("utils.memory_manager.load_config", return_value={"llm": {"deepseek": {"api_key": "mock_key", "model": "mock-model"}}}):
-            mm = MemoryManager()
-            mm.short_term = mock_stm
-            mm.long_term = mock_ltm
-            result = mm.compress_window()
-
-    assert result["success"] == True
-    assert result["doc_id"] == "memory_compressed"
-    print("  [PASS] 压缩成功")
-
-
-def test_memory_manager_compress_fallback():
-    print("\n[test] MemoryManager - compress_window (降级)")
-    mock_stm = unittest.mock.MagicMock()
-    mock_stm.get_all.return_value = [{"turn": 1, "node_name": "node1", "content": {}}]
-    mock_stm.is_overflow.return_value = True
-
-    mock_ltm = unittest.mock.MagicMock()
-    mock_ltm.add_compressed.return_value = "memory_fallback"
-
-    with unittest.mock.patch("utils.llm_provider.DeepSeekProvider") as MockLLM:
-        MockLLM.side_effect = Exception("LLM 不可用")
-
-        with unittest.mock.patch("utils.memory_manager.load_config", return_value={"llm": {"deepseek": {"api_key": "mock_key", "model": "mock-model"}}}):
-            mm = MemoryManager()
-            mm.short_term = mock_stm
-            mm.long_term = mock_ltm
-            result = mm.compress_window()
-
-    assert result["success"] == True
-    print("  [PASS] LLM 不可用时降级成功")
-
-
-def test_get_context():
-    print("\n[test] MemoryManager - get_context")
-    with unittest.mock.patch("utils.memory_manager.ShortTermMemory") as MockSTM:
+    with unittest.mock.patch("utils.memory_manager.EpisodicMemory") as MockEM:
         with unittest.mock.patch("utils.memory_manager.LongTermMemory") as MockLTM:
-            mock_stm = unittest.mock.MagicMock()
-            mock_stm.get_recent.return_value = [{"event": "recent"}]
-            mock_stm.size.return_value = 5
-            MockSTM.return_value = mock_stm
+            mock_em = unittest.mock.MagicMock()
+            mock_em.write.return_value = 100
+            MockEM.return_value = mock_em
 
             mock_ltm = unittest.mock.MagicMock()
-            mock_ltm.search.return_value = [{"id": "ltm_1"}]
+            mock_ltm.summarize_and_store.return_value = "memory_test_001"
             MockLTM.return_value = mock_ltm
 
             mm = MemoryManager()
-            ctx = mm.get_context("测试查询")
+            result = mm.add_memory(
+                session_id="test_session",
+                event="planner_decision",
+                node_name="planner",
+                content={"situation": "采集10条", "outcome": "ok"},
+                execution_result={"collected_count": 10, "brief_quality": 0.9},
+                planner_decision={"sub_agent_plan": [{"agent": "Collection"}]},
+                trigger_type="manual",
+            )
 
-    assert len(ctx["short_term"]) == 1
+    assert result["log_id"] == 100
+    assert result["chroma_doc_id"] == "memory_test_001"
+    print("  [PASS] MemoryManager.add_memory 同时写入 SQLite + ChromaDB")
+
+
+def test_get_context():
+    """测试 get_context：情节记忆(近N天) + 长期记忆(语义)。"""
+    print("\n[test] MemoryManager - get_context")
+    with unittest.mock.patch("utils.memory_manager.EpisodicMemory") as MockEM:
+        with unittest.mock.patch("utils.memory_manager.LongTermMemory") as MockLTM:
+            mock_em = unittest.mock.MagicMock()
+            mock_em.get_recent_days_logs.return_value = [
+                {"session_id": "s1", "metadata": {"outcome": "ok"}},
+                {"session_id": "s2", "metadata": {"outcome": "retry"}},
+            ]
+            MockEM.return_value = mock_em
+
+            mock_ltm = unittest.mock.MagicMock()
+            mock_ltm.search.return_value = [
+                {"id": "ltm_1", "document": "历史经验1", "distance": 0.1},
+            ]
+            MockLTM.return_value = mock_ltm
+
+            mm = MemoryManager()
+            ctx = mm.get_context("测试查询", n_episodic=10, n_long_term=3, lookback_days=7)
+
+    assert ctx["episodic_count"] == 2
+    assert ctx["long_term_count"] == 1
+    assert len(ctx["episodic"]) == 2
     assert len(ctx["long_term"]) == 1
-    assert ctx["short_term_size"] == 5
-    print("  [PASS] get_context 返回短期+长期记忆")
+    print("  [PASS] get_context 返回情节(近7天) + 长期(语义)")
 
+
+# ============================================================
+# 单例与便捷函数测试
+# ============================================================
 
 def test_global_singleton():
+    """测试全局单例。"""
     print("\n[test] 全局单例")
     mm1 = get_memory_manager()
     mm2 = get_memory_manager()
@@ -239,45 +249,70 @@ def test_global_singleton():
 
 
 def test_convenience_functions():
+    """测试便捷函数。"""
     print("\n[test] 便捷函数")
     with unittest.mock.patch("utils.memory_manager.get_memory_manager") as MockGetMM:
         mock_mm = unittest.mock.MagicMock()
-        mock_mm.add_memory.return_value = {"turn": 1}
-        mock_mm.get_context.return_value = {"short_term": []}
+        mock_mm.add_memory.return_value = {"log_id": 1, "chroma_doc_id": "doc_1"}
+        mock_mm.get_context.return_value = {"episodic": [], "long_term": []}
         MockGetMM.return_value = mock_mm
 
         result1 = add_memory("s1", "e1", "n1", {})
         result2 = get_context("query")
 
-    assert result1["turn"] == 1
-    assert result2["short_term"] == []
+    assert result1["log_id"] == 1
+    assert result2["episodic"] == []
     print("  [PASS] 便捷函数正确调用")
 
 
-def test_window_size_constant():
+def test_constants():
+    """测试常量配置。"""
     print("\n[test] 常量配置")
-    assert SHORT_TERM_WINDOW_SIZE == 15
-    print(f"  [PASS] SHORT_TERM_WINDOW_SIZE = {SHORT_TERM_WINDOW_SIZE}")
+    assert EPISODIC_LOOKBACK_DAYS == 7
+    print(f"  [PASS] EPISODIC_LOOKBACK_DAYS = {EPISODIC_LOOKBACK_DAYS}")
 
+
+def test_summarize_execution_convenience():
+    """测试 summarize_execution 便捷函数。"""
+    print("\n[test] summarize_execution 便捷函数")
+    mock_ltm = unittest.mock.MagicMock()
+    mock_ltm.summarize_and_store.return_value = "memory_summary_001"
+    mock_mm = unittest.mock.MagicMock()
+    mock_mm.long_term = mock_ltm
+
+    with unittest.mock.patch("utils.memory_manager.get_memory_manager", return_value=mock_mm):
+        doc_id = summarize_execution(
+            session_id="test_session",
+            planner_decision={"sub_agent_plan": []},
+            execution_result={"collected_count": 8},
+            trigger_type="manual",
+        )
+
+    assert doc_id == "memory_summary_001"
+    print("  [PASS] summarize_execution 正确调用")
+
+
+# ============================================================
+# 运行
+# ============================================================
 
 if __name__ == "__main__":
     print("=" * 50)
-    print("记忆管理模块测试")
+    print("记忆管理模块测试 (FeedLens 场景适配)")
     print("=" * 50)
 
     tests = [
-        test_short_term_memory,
-        test_short_term_get_recent,
-        test_episodic_memory,
-        test_long_term_memory,
+        test_episodic_write,
+        test_episodic_get_recent_days,
+        test_long_term_summarize_and_store,
+        test_long_term_summarize_fallback,
         test_long_term_search,
         test_memory_manager_add,
-        test_memory_manager_compress,
-        test_memory_manager_compress_fallback,
         test_get_context,
         test_global_singleton,
         test_convenience_functions,
-        test_window_size_constant,
+        test_constants,
+        test_summarize_execution_convenience,
     ]
 
     passed = 0
@@ -289,6 +324,8 @@ if __name__ == "__main__":
         except Exception as e:
             failed += 1
             print(f"  [FAIL] {test.__name__}: {e}")
+            import traceback
+            traceback.print_exc()
 
     print("")
     print("=" * 50)
