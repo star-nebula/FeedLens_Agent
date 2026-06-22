@@ -91,17 +91,39 @@ def test_get_rss_sources():
     print("[test] _get_rss_sources - RSS 源选择")
     print("=" * 60)
 
-    # 无 preferred_sources → 使用默认
-    state = make_state(structured_goal={"topics": ["AI"], "preferred_sources": []})
-    sources = _get_rss_sources(state)
-    print(f"✓ 默认源: {sources}")
-    assert len(sources) > 0, "默认源不应为空"
+    # 有 preferred_sources → 优先使用（mock 数据库无活跃源）
+    from models import database as db_mod
+    original_db = db_mod.Database
+    class FakeDB:
+        def __init__(self, *a, **kw): pass
+        def get_connection(self):
+            from contextlib import contextmanager
+            class FakeConn:
+                def execute(self, *a, **kw):
+                    class FakeResult:
+                        def fetchall(self): return []
+                    return FakeResult()
+                def __enter__(self): return self
+                def __exit__(self, *a): pass
+            @contextmanager
+            def conn():
+                yield FakeConn()
+            return conn()
+    db_mod.Database = FakeDB
 
-    # 有 preferred_sources → 优先使用
     state = make_state(structured_goal={"preferred_sources": ["http://example.com/feed"] })
     sources = _get_rss_sources(state)
-    assert sources == ["http://example.com/feed"]
+    db_mod.Database = original_db  # 恢复
+    assert sources == ["http://example.com/feed"], f"expected ['http://example.com/feed'], got {sources}"
     print("✓ preferred_sources 优先逻辑正确")
+
+    # 无 preferred_sources + 无 DB → 使用默认
+    state2 = make_state(structured_goal={"topics": ["AI"], "preferred_sources": []})
+    db_mod.Database = FakeDB
+    sources2 = _get_rss_sources(state2)
+    db_mod.Database = original_db
+    print(f"✓ 默认源: {sources2}")
+    assert len(sources2) > 0, "默认源不应为空"
     return True
 
 

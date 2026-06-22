@@ -2,7 +2,7 @@
 FeedLens search_web MCP Server (SSE :8100)
 
 提供 web 搜索工具，当 RSS 采集不足时补充搜索结果。
-MVP 阶段使用 DuckDuckGo Instant Answer API 作为搜索源（无需 API Key），
+使用 cn.bing.com 作为搜索源（无需 API Key，国内可用），
 失败时降级为模拟数据。
 
 运行方式:
@@ -10,10 +10,13 @@ MVP 阶段使用 DuckDuckGo Instant Answer API 作为搜索源（无需 API Key�
 """
 
 import json
+import re
 import sys
 from typing import List, Dict, Any
+from html import unescape
 
 import httpx
+from bs4 import BeautifulSoup
 from mcp.server.fastmcp import FastMCP
 
 
@@ -34,63 +37,64 @@ async def search(query: str, max_results: int = 10) -> List[Dict[str, Any]]:
         搜索结果列表，每项包含 title, url, snippet, source
     """
     try:
-        results = await _search_duckduckgo(query, max_results)
+        results = await _search_bing(query, max_results)
         if results:
             return results
     except Exception as e:
-        print(f"[search] DuckDuckGo search failed: {e}", file=sys.stderr)
+        print(f"[search] Bing search failed: {e}", file=sys.stderr)
 
     # 降级：返回模拟数据
     return _mock_search_results(query, max_results)
 
 
-async def _search_duckduckgo(query: str, max_results: int) -> List[Dict[str, Any]]:
-    """调用 DuckDuckGo Instant Answer API。"""
+async def _search_bing(query: str, max_results: int) -> List[Dict[str, Any]]:
+    """解析 cn.bing.com 搜索结果页。"""
     async with httpx.AsyncClient(timeout=15.0, follow_redirects=True) as client:
         response = await client.get(
-            "https://api.duckduckgo.com/",
-            params={
-                "q": query,
-                "format": "json",
-                "no_html": 1,
-                "skip_disambig": 1,
+            "https://cn.bing.com/search",
+            params={"q": query, "count": max_results},
+            headers={
+                "User-Agent": (
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                "Accept-Language": "zh-CN,zh;q=0.9",
             },
-            headers={"Accept": "application/json", "User-Agent": "FeedLens/1.0"},
         )
         response.raise_for_status()
-        data = response.json()
 
-        results = []
-        topics = data.get("RelatedTopics", [])
+    soup = BeautifulSoup(response.text, "html.parser")
+    results = []
 
-        for topic in topics:
-            if len(results) >= max_results:
-                break
+    # cn.bing.com 搜索结果在 <li class="b_algo"> 中
+    for item in soup.select("li.b_algo"):
+        if len(results) >= max_results:
+            break
 
-            if "Text" in topic and "FirstURL" in topic:
-                text = topic.get("Text", "")
-                title = text.split(" - ")[0] if " - " in text else text[:60]
-                results.append({
-                    "title": title,
-                    "url": topic["FirstURL"],
-                    "snippet": text,
-                    "source": "duckduckgo",
-                })
-            elif "Topics" in topic:
-                for sub in topic["Topics"]:
-                    if len(results) >= max_results:
-                        break
-                    if "Text" in sub and "FirstURL" in sub:
-                        text = sub.get("Text", "")
-                        title = text.split(" - ")[0] if " - " in text else text[:60]
-                        results.append({
-                            "title": title,
-                            "url": sub["FirstURL"],
-                            "snippet": text,
-                            "source": "duckduckgo",
-                        })
+        title_el = item.select_one("h2 a")
+        snippet_el = item.select_one(".b_caption p") or item.select_one(".b_lineclamp2")
 
-        return results
+        if not title_el:
+            continue
+
+        title = title_el.get_text(strip=True)
+        url = title_el.get("href", "")
+        snippet = snippet_el.get_text(strip=True) if snippet_el else ""
+
+        # 清理 HTML 实体和多余空白
+        title = unescape(title)
+        snippet = unescape(snippet)
+        snippet = re.sub(r"\s+", " ", snippet).strip()
+
+        results.append({
+            "title": title,
+            "url": url,
+            "snippet": snippet,
+            "source": "bing",
+        })
+
+    return results
 
 
 def _mock_search_results(query: str, max_results: int = 10) -> List[Dict[str, Any]]:
