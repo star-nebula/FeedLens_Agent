@@ -1,33 +1,30 @@
 """
-排序 Agent — 智能去重 + 偏好排序。
+排序 Agent — ReAct 循环实现（Agentic 升级规划2 Phase 3b）。
 
-工作流: vector_search → deduplicate → rank_items
-ReAct: 检索偏好 → 规划排序策略 → 去重+排序 → 评估 → 调参或 Done
+从 StateGraph 改为 ReAct 循环：LLM Thought → function_call → Observation → ... → finish_task
 
-去重策略:
-  - ≥0.88: 直接判定为重复，保留一条代表
-  - ≤0.70: 判定为不重复，全部保留
-  - 0.70-0.88: 模糊区间，调用 LLM 做二元判断
-  - 最多 LLM 裁决 20 对，超限按硬判处理
+工具列表: deduplicate, rank_items, finish_task
 """
 
+import json
 import os
 import math
 from datetime import datetime, timedelta
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Tuple
 
 from langgraph.graph import StateGraph, END
 from utils.config import load_config
 from utils.hooks import hooks
 from agents.state import FeedLensState
 from tools import deduplicate, vector_search, db_read, db_write
+from tools.tool_registry import tool_registry
 from models.vector_store import VectorStore
 from utils.embedding import EmbeddingModel
 from utils.llm_provider import DeepSeekProvider
 
 
 # ============================================================
-# 配置加载
+# 配置加载（保留原有辅助函数）
 # ============================================================
 
 def _get_vector_store() -> VectorStore:
@@ -57,12 +54,7 @@ def _get_db_path() -> str:
     return config.get("data", {}).get("db_path", "data/feedlens.db")
 
 
-# ============================================================
-# 排序辅助函数
-# ============================================================
-
 def _cosine(vec_a, vec_b) -> float:
-    """计算两个向量的余弦相似度（内联实现，无外部依赖）。"""
     if not vec_a or not vec_b:
         return 0.0
     if len(vec_a) != len(vec_b):
@@ -76,11 +68,6 @@ def _cosine(vec_a, vec_b) -> float:
 
 
 def _load_preference_vectors(user_id: int) -> tuple:
-    """从 ChromaDB user_preference 集合读取用户偏好向量（v_like / v_dislike）。
-
-    ID 格式与 feedback_agent.vector_add_node 保持一致：user_{id}_like / user_{id}_dislike。
-    返回 (v_like, v_dislike)，未找到则为 None。
-    """
     try:
         vs = _get_vector_store()
         vs.init_collections()
@@ -105,7 +92,6 @@ def _load_preference_vectors(user_id: int) -> tuple:
 
 
 def _load_ranking_config() -> dict:
-    """加载排序相关配置（权重、阈值、加分项），未配置时回退到 MVP 推荐默认值。"""
     config = load_config()
     cold = config.get("weights_cold", {})
     warm = config.get("weights_warm", {})
@@ -131,44 +117,30 @@ def _load_ranking_config() -> dict:
         "feedback_bias_positive": feedback_cfg.get("feedback_bias_positive", 0.15),
         "feedback_bias_negative": feedback_cfg.get("feedback_bias_negative", -0.10),
         "feedback_bias_irrelevant": feedback_cfg.get("feedback_bias_irrelevant", -0.15),
-        # 去重阈值（config.ranking.*）
         "dedup_threshold": ranking_cfg.get("dedup_threshold", 0.88),
         "dedup_llm_lower": ranking_cfg.get("dedup_llm_lower", 0.70),
         "dedup_hard_threshold": ranking_cfg.get("dedup_hard_threshold", 0.80),
         "max_llm_adjudications": ranking_cfg.get("max_llm_adjudications", 20),
     }
 
-# ============================================================
-# 节点定义
-# ============================================================
 
+# ============================================================
+# 保留原有节点函数（供 tool_registry 调用）
+# ============================================================
 
 def vector_search_node(state: FeedLensState) -> dict:
-    """检索用户偏好向量（ChromaDB user_preference 集合）。
-
-    返回:
-        user_preferences: 偏好向量检索结果
-        feedback_history: 用户反馈历史
-    """
     user_id = state.get("user_id", 1)
     structured_goal = state.get("structured_goal", {})
     topics = structured_goal.get("topics", [])
     keywords = structured_goal.get("keywords", [])
-
     query_text = " ".join(topics[:3] + keywords[:3])[:100] or "技术资讯"
     print(f"[vector_search] 查询用户偏好: user_id={user_id}, query={query_text}", flush=True)
-
     try:
         vs = _get_vector_store()
         vs.init_collections()
-
         preferences = vector_search(
-            vs.persist_dir,
-            query_text,
-            n_results=10,
-            collection_name="user_preference",
+            vs.persist_dir, query_text, n_results=10, collection_name="user_preference",
         )
-
         db_path = _get_db_path()
         feedback_history = []
         try:
@@ -178,61 +150,38 @@ def vector_search_node(state: FeedLensState) -> dict:
                 [user_id, (datetime.now() - timedelta(days=30)).isoformat()],
             )
         except Exception as e:
-            print(f"[vector_search] 读取反馈历史失败（可能未初始化）: {e}", flush=True)
-
+            print(f"[vector_search] 读取反馈历史失败: {e}", flush=True)
         print(f"[vector_search] 偏好检索: {len(preferences)} 条, 反馈历史: {len(feedback_history)} 条", flush=True)
-        return {
-            "user_preferences": preferences,
-            "feedback_history": feedback_history,
-        }
+        return {"user_preferences": preferences, "feedback_history": feedback_history}
     except Exception as e:
         print(f"[vector_search] 失败: {e}", flush=True)
-        return {
-            "user_preferences": [],
-            "feedback_history": [],
-            "error": f"vector_search failed: {e}",
-        }
+        return {"user_preferences": [], "feedback_history": [], "error": f"vector_search failed: {e}"}
 
 
 def deduplicate_node(state: FeedLensState) -> dict:
-    """向量去重（0.88 阈值 + 0.70-0.88 LLM 裁决）。
-
-    返回:
-        collected_items: 去重后的条目列表
-        item_relations: 去重关系记录
-    """
     items = state.get("collected_items", [])
     if not items:
         return {"collected_items": [], "item_relations": []}
-
     print(f"[deduplicate] 开始去重: {len(items)} 条", flush=True)
-
     try:
         vs = _get_vector_store()
         vs.init_collections()
         embedding_model = _get_embedding_model()
         llm_provider = _get_llm_provider()
-
         dedup_cfg = _load_ranking_config()
         unique_items, duplicate_pairs = deduplicate(
-            items,
-            vector_store=vs,
-            embedding_model=embedding_model,
+            items, vector_store=vs, embedding_model=embedding_model,
             llm_provider=llm_provider,
             threshold_high=dedup_cfg["dedup_threshold"],
             threshold_low=dedup_cfg["dedup_llm_lower"],
             max_llm_adjudications=dedup_cfg["max_llm_adjudications"],
         )
-
-        # 更新 similar_count（统计每篇保留条目的相似篇数）
         similar_map = {}
         for pair in duplicate_pairs:
             a_id = pair["item_a_id"]
             similar_map[a_id] = similar_map.get(a_id, 0) + 1
         for item in unique_items:
             item["similar_count"] = similar_map.get(item.get("id", ""), 1)
-
-        # 写入 item_relations 表（暂时关闭 FK 约束，因测试中条目可能未写入 raw_items）
         db_path = _get_db_path()
         try:
             db_write(db_path, "PRAGMA foreign_keys = OFF", [])
@@ -245,67 +194,34 @@ def deduplicate_node(state: FeedLensState) -> dict:
                     """INSERT OR IGNORE INTO item_relations
                        (item_a_id, item_b_id, similarity_score, dedup_method, relation_type, created_at)
                        VALUES (?, ?, ?, ?, ?, ?)""",
-                    [
-                        pair["item_a_id"],
-                        pair["item_b_id"],
-                        pair["similarity_score"],
-                        pair["dedup_method"],
-                        pair["relation_type"],
-                        datetime.now().isoformat(),
-                    ],
+                    [pair["item_a_id"], pair["item_b_id"], pair["similarity_score"],
+                     pair["dedup_method"], pair["relation_type"], datetime.now().isoformat()],
                 )
             except Exception as e:
                 if "FOREIGN KEY" not in str(e):
                     print(f"[deduplicate] 写入关系失败: {e}", flush=True)
-
         try:
             db_write(db_path, "PRAGMA foreign_keys = ON", [])
         except Exception:
             pass
         print(f"[deduplicate] 完成: {len(unique_items)} 条保留, {len(duplicate_pairs)} 对去重", flush=True)
-        return {
-            "collected_items": unique_items,
-            "item_relations": duplicate_pairs,
-        }
+        return {"collected_items": unique_items, "item_relations": duplicate_pairs}
     except Exception as e:
         print(f"[deduplicate] 失败: {e}", flush=True)
-        # 失败时返回原始条目
         for item in items:
             item.setdefault("similar_count", 1)
-        return {
-            "collected_items": items,
-            "item_relations": [],
-            "error": f"deduplicate failed: {e}",
-        }
+        return {"collected_items": items, "item_relations": [], "error": f"deduplicate failed: {e}"}
 
 
 def rank_items_node(state: FeedLensState) -> dict:
-    """多因子加权排序。
-
-    final_score = w1*similarity + w2*recency + w3*preference + w4*importance
-    
-    因子计算:
-      - similarity = cosine(item_embedding, goal_embedding)
-      - recency = exp(-Δt / τ), τ = 24h
-      - preference = 冷启动用 similarity 代理，有反馈由 feedback_bias 驱动
-      - importance = (LLM 1-5 分归一化至 0-1)
-    
-    权重动态切换: feedback_count < 3 → cold_start(0.40/0.25/0.10/0.25), >= 3 → with_feedback(0.30/0.20/0.40/0.10)
-    时间衰减预筛: Δt > 7 天直接丢弃（τ=24h 用于排序权重）
-    """
     items = state.get("collected_items", [])
     feedback_history = state.get("feedback_history", [])
     goal_embedding = state.get("goal_embedding", [])
-
     if not items:
         return {"ranked_items": [], "ranking_detail": {}}
-
     print(f"[rank_items] 开始排序: {len(items)} 条", flush=True)
-
-    # ---- 0. 时间衰减预筛（Δt > N 天直接丢弃）----
-    # expand_threshold 时放宽预筛窗口：7 天 -> 14 天，纳入稍旧但相关的条目
     expand_threshold = bool(state.get("expand_threshold", False))
-    prefilter_hours = 336 if expand_threshold else 168  # 14天 / 7天
+    prefilter_hours = 336 if expand_threshold else 168
     now = datetime.now()
     filtered_items = []
     for item in items:
@@ -319,18 +235,13 @@ def rank_items_node(state: FeedLensState) -> dict:
             except Exception:
                 pass
         filtered_items.append(item)
-
     pre_drop = len(items) - len(filtered_items)
     pre_label = "14 天" if expand_threshold else "7 天"
     print(f"[rank_items] 预筛({pre_label}): {len(items)} -> {len(filtered_items)} 条 (丢弃: {pre_drop} 条)", flush=True)
-
     if not filtered_items:
         return {"ranked_items": [], "ranking_detail": {"total_items": 0, "prescreened_dropped": pre_drop}}
-
-    # ---- 1. 权重动态切换（从 config.yaml 读取）----
     rank_cfg = _load_ranking_config()
     feedback_count = len(feedback_history)
-    # rank.weights hook（P1）：冷/热启动判定 + 权重选择
     weight_ctx = hooks.run("rank.weights", {
         "feedback_count": feedback_count,
         "cold_start_threshold": rank_cfg.get("cold_start_threshold", 3),
@@ -340,11 +251,8 @@ def rank_items_node(state: FeedLensState) -> dict:
     is_cold_start = weight_ctx.get("is_cold_start", feedback_count < rank_cfg["cold_start_threshold"])
     weights = weight_ctx.get("weights", rank_cfg["weights_warm"])
     diversity_bonus = rank_cfg["source_diversity_bonus"]
-
     mode_label = weight_ctx.get("mode_label", "cold_start" if is_cold_start else "with_feedback")
     print(f"[rank_items] 权重: {mode_label} (feedback={feedback_count})", flush=True)
-
-        # ---- 2. 反馈偏差映射（数值从 config.yaml 读取）----
     feedback_bias_map = {}
     for fb in feedback_history:
         item_id = fb.get("item_id", "")
@@ -355,23 +263,18 @@ def rank_items_node(state: FeedLensState) -> dict:
             feedback_bias_map[item_id] = rank_cfg["feedback_bias_negative"]
         elif fb_type == "irrelevant":
             feedback_bias_map[item_id] = rank_cfg["feedback_bias_irrelevant"]
-
-    # ---- 2b. 读取用户偏好向量（warm 模式下用于 preference 余弦因子）----
     user_id = state.get("user_id", 1)
-    v_like, v_dislike = (None, None)
-    if not is_cold_start:
+    # 优先使用预加载的偏好向量（由 run_ranking_agent 传入），避免重复加载
+    v_like = state.get("_pref_v_like")
+    v_dislike = state.get("_pref_v_dislike")
+    if not is_cold_start and v_like is None and v_dislike is None:
         v_like, v_dislike = _load_preference_vectors(user_id)
         if v_like is None and v_dislike is None:
-            # 偏好向量尚未建立（首次进入 warm），降级为 similarity 代理
             print("[rank_items] 偏好向量未就绪，preference 降级为 similarity 代理", flush=True)
-
-    # ---- 3. 各因子计算 ----
     scored_items = []
     for item in filtered_items:
         item_emb = item.get("embedding", [])
         item_id = item.get("id", "")
-
-        # similarity: cosine(item_embedding, goal_embedding)
         similarity_score = 0.0
         if item_emb and goal_embedding and len(item_emb) == len(goal_embedding):
             dot = sum(a * b for a, b in zip(item_emb, goal_embedding))
@@ -379,8 +282,6 @@ def rank_items_node(state: FeedLensState) -> dict:
             mag2 = (sum(g * g for g in goal_embedding)) ** 0.5
             if mag1 > 0 and mag2 > 0:
                 similarity_score = max(0.0, dot / (mag1 * mag2))
-
-        # recency: exp(-Δt / 24h)
         recency_score = 0.5
         published_at = item.get("published_at", "")
         if published_at:
@@ -390,36 +291,27 @@ def rank_items_node(state: FeedLensState) -> dict:
                 recency_score = math.exp(-hours_diff / 24.0)
             except Exception:
                 recency_score = 0.5
-
-        # preference: cosine(item_embedding, user_preference_vector)
-        #   - cold_start / 偏好未就绪: 用 similarity 代理
-        #   - warm: (cos(item,v_like) - cos(item,v_dislike)) 归一化 [0,1]，再叠加 feedback_bias
         if is_cold_start or (v_like is None and v_dislike is None):
             base_pref = similarity_score
         else:
             like_sim = _cosine(item_emb, v_like) if v_like else 0.0
             dislike_sim = _cosine(item_emb, v_dislike) if v_dislike else 0.0
-            pref_raw = like_sim - dislike_sim  # [-1,1]
+            pref_raw = like_sim - dislike_sim
             base_pref = max(0.0, min(1.0, 0.5 + pref_raw / 2.0))
         feedback_bias = feedback_bias_map.get(item_id, 0.0)
         preference_score = max(0.0, min(1.0, base_pref + feedback_bias))
-
-        # importance: (LLM 1-5 分归一化至 0-1)
         raw_importance = float(item.get("importance", 0.5))
         if raw_importance > 1.0:
             importance_score = (raw_importance - 1.0) / 4.0
         else:
             importance_score = raw_importance
-
-        # final_score = w1*sim + w2*rec + w3*pref + w4*imp
         final_score = (
             weights["similarity"] * similarity_score
             + weights["recency"] * recency_score
             + weights["preference"] * preference_score
             + weights["importance"] * importance_score
-            + (diversity_bonus if not is_cold_start else 0.0)  # P1: 来源多样性加分（config）
+            + (diversity_bonus if not is_cold_start else 0.0)
         )
-
         scored_items.append({
             **item,
             "_score": final_score,
@@ -428,20 +320,11 @@ def rank_items_node(state: FeedLensState) -> dict:
                 "recency": round(recency_score, 4),
                 "preference": round(preference_score, 4),
                 "importance": round(importance_score, 4),
-                "weighted_sim": round(weights["similarity"] * similarity_score, 4),
-                "weighted_rec": round(weights["recency"] * recency_score, 4),
-                "weighted_pref": round(weights["preference"] * preference_score, 4),
-                "weighted_imp": round(weights["importance"] * importance_score, 4),
             },
         })
-
-    # ---- 4. 降序 + 上限 ----
-    # expand_threshold 时放宽截断上限：10 -> 20，让更多已采集条目进入简报
     default_max = 20 if expand_threshold else 10
     max_items = state.get("max_briefing_items", default_max)
-    ranked_items = scored_items[:max_items]
-
-    # ---- 5. ranking_detail ----
+    ranked_items = sorted(scored_items, key=lambda x: x["_score"], reverse=True)[:max_items]
     current_detail = state.get("ranking_detail", {})
     rerank_count = current_detail.get("rerank_count", 0)
     top = ranked_items[0]["_score"] if ranked_items else 0.0
@@ -456,38 +339,8 @@ def rank_items_node(state: FeedLensState) -> dict:
         "needs_rerank": False,
         "rerank_count": rerank_count + 1,
     }
-
     print(f"[rank_items] 完成: {len(ranked_items)} 条, 最高分: {top:.4f}", flush=True)
     return {"ranked_items": ranked_items, "ranking_detail": ranking_detail}
-def should_rerank(state: FeedLensState) -> str:
-    """评估排序质量，判断是否需要调参重排。
-
-    判断逻辑:
-      - 去重后剩余 < 3 条 → 标记需要重新采集（由主 Agent 决策）
-      - 最高分 < 0.3 且重排次数 < 2 → 调参重排
-      - 否则 → Done
-    """
-    items = state.get("collected_items", [])
-    ranking_detail = state.get("ranking_detail", {})
-    rerank_count = ranking_detail.get("rerank_count", 0)
-
-    if len(items) < 3:
-        print(f"[should_rerank] 去重后仅 {len(items)} 条 < 3，标记需重新采集", flush=True)
-        return "__end__"
-
-    top_score = ranking_detail.get("top_score", 0.0)
-    if top_score < 0.3 and rerank_count < 2:
-        print(f"[should_rerank] 最高分 {top_score:.4f} < 0.3，第 {rerank_count+1} 次调参重排", flush=True)
-        return "rank_items"
-
-    print(f"[should_rerank] 排序质量合格（或已达到重排上限）", flush=True)
-    return "__end__"
-
-
-# ============================================================
-# StateGraph 构建
-# ============================================================
-
 
 
 # ============================================================
@@ -495,7 +348,6 @@ def should_rerank(state: FeedLensState) -> str:
 # ============================================================
 
 def _default_rank_weights(ctx: dict) -> dict:
-    """默认排序权重策略：冷/热启动二选一。"""
     fb = ctx.get("feedback_count", 0)
     threshold = ctx.get("cold_start_threshold", 3)
     is_cold = fb < threshold
@@ -505,24 +357,213 @@ def _default_rank_weights(ctx: dict) -> dict:
         "mode_label": "cold_start" if is_cold else "with_feedback",
     }
 
+
 hooks.register("rank.weights", _default_rank_weights)
+
+
+# ============================================================
+# System Prompt
+# ============================================================
+
+RANKING_SYSTEM_PROMPT = """你是 FeedLens 的排序 Agent。你的目标是对采集到的内容进行去重和排序。
+
+可用工具：
+- deduplicate: 向量相似度去重（高相似度直接判重，中间区间 LLM 裁决）
+- rank_items: 多因子加权排序（综合相似度、时效性、用户偏好、重要性）
+- finish_task: 标记排序完成，返回结果摘要
+
+工作流程建议：
+1. 先调用 deduplicate 去除重复内容
+2. 再调用 rank_items 按用户偏好排序
+3. 调用 finish_task 结束
+
+如果采集条目较少（< 3 条），可以跳过去重直接排序。
+完成后必须调用 finish_task。"""
+
+
+# ============================================================
+# ReAct 排序函数
+# ============================================================
+
+def run_ranking_agent(state: FeedLensState) -> dict:
+    """ReAct 排序 Agent — LLM 自主调用工具完成去重+排序。
+
+    Args:
+        state: FeedLensState，包含 collected_items, user_id, feedback_history 等
+
+    Returns:
+        dict: {collected_items(去重后), ranked_items, ranking_detail, item_relations}
+    """
+    llm = _get_llm_provider()
+    tools = tool_registry.get_schemas_for_phase("ranking")
+
+    items = state.get("collected_items", [])
+    user_id = state.get("user_id", 1)
+
+    # 先检索用户偏好和反馈历史
+    vs_result = vector_search_node(state)
+    current_state = dict(state)
+    current_state.update(vs_result)
+
+    # 预加载偏好向量到 current_state，避免 rank_items_node 内部重复加载
+    feedback_history = vs_result.get("feedback_history", [])
+    feedback_count = len(feedback_history)
+    rank_cfg = _load_ranking_config()
+    is_cold_start = feedback_count < rank_cfg.get("cold_start_threshold", 3)
+    if not is_cold_start:
+        v_like, v_dislike = _load_preference_vectors(user_id)
+        if v_like is not None or v_dislike is not None:
+            current_state["_pref_v_like"] = v_like
+            current_state["_pref_v_dislike"] = v_dislike
+            print(f"[ranking_react] 偏好向量已预加载 (like={v_like is not None}, dislike={v_dislike is not None})", flush=True)
+
+    user_msg = f"待处理条目: {len(items)} 条\n"
+    user_msg += f"用户 ID: {user_id}\n"
+    if vs_result.get("feedback_history"):
+        user_msg += f"反馈历史: {len(vs_result['feedback_history'])} 条\n"
+
+    # 注入条目摘要（关键字段，避免 token 爆炸）
+    if items:
+        user_msg += "\n--- 条目列表（每条仅含关键字段）---\n"
+        for i, item in enumerate(items[:50]):  # 最多 50 条
+            title = item.get("title", "")[:100]
+            source = item.get("source_name", item.get("source_url", ""))[:60]
+            pub = item.get("published_at", "")[:19]
+            summary = (item.get("summary", "") or item.get("content", ""))[:120]
+            item_id = item.get("id", f"item_{i}")
+            user_msg += (
+                f"[{i}] id={item_id} | title={title} | source={source} | "
+                f"time={pub} | summary={summary}\n"
+            )
+
+    messages = [
+        {"role": "system", "content": RANKING_SYSTEM_PROMPT},
+        {"role": "user", "content": user_msg},
+    ]
+
+    ranked_items = []
+    ranking_detail = {}
+
+    max_turns = 5
+    for turn in range(max_turns):
+        print(f"[ranking_react] 第 {turn + 1} 轮思考...", flush=True)
+
+        try:
+            response_dict = llm.chat_with_tools(messages=messages, tools=tools)
+        except Exception as e:
+            print(f"[ranking_react] LLM 调用失败: {e}，退出循环", flush=True)
+            break
+
+        choices = response_dict.get("choices", [])
+        if not choices:
+            print("[ranking_react] LLM 返回空 choices，退出循环", flush=True)
+            break
+        choice = choices[0]
+        message = choice.get("message", {})
+        finish_reason = choice.get("finish_reason", "")
+
+        tool_calls = message.get("tool_calls", [])
+        if tool_calls and finish_reason == "tool_calls":
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                tool_name = func.get("name", "")
+                try:
+                    tool_args = json.loads(func.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    tool_args = {}
+
+                print(f"[ranking_react] 调用工具: {tool_name}", flush=True)
+
+                # 特殊处理：deduplicate/rank_items 需要注入 collected_items
+                if tool_name in ("deduplicate", "rank_items") and "items" not in tool_args:
+                    tool_args["items"] = current_state.get("collected_items", items)
+                if tool_name == "rank_items":
+                    if "user_id" not in tool_args:
+                        tool_args["user_id"] = user_id
+                    if "feedback_history" not in tool_args:
+                        tool_args["feedback_history"] = vs_result.get("feedback_history", [])
+                    if "goal_embedding" not in tool_args:
+                        tool_args["goal_embedding"] = state.get("goal_embedding", [])
+                    # 传递预加载的偏好向量，避免 rank_items_node 内部重复加载
+                    if current_state.get("_pref_v_like") is not None:
+                        tool_args["_pref_v_like"] = current_state["_pref_v_like"]
+                    if current_state.get("_pref_v_dislike") is not None:
+                        tool_args["_pref_v_dislike"] = current_state["_pref_v_dislike"]
+
+                try:
+                    result = tool_registry.dispatch(tool_name, tool_args)
+                except Exception as e:
+                    result = {"error": str(e)}
+                    print(f"[ranking_react] 工具 {tool_name} 失败: {e}", flush=True)
+
+                if tool_name == "deduplicate":
+                    unique = result.get("unique_items", [])
+                    dup_pairs = result.get("duplicate_pairs", [])
+                    current_state["collected_items"] = unique
+                    current_state["item_relations"] = dup_pairs
+                elif tool_name == "rank_items":
+                    ranked_items = result.get("ranked_items", [])
+                    ranking_detail = result.get("ranking_detail", {})
+                    current_state["ranked_items"] = ranked_items
+                    current_state["ranking_detail"] = ranking_detail
+                elif tool_name == "finish_task":
+                    summary = result.get("summary", "")
+                    print(f"[ranking_react] 排序完成: {len(ranked_items)} 条", flush=True)
+                    # 追加 finish_task 调用记录到 messages 历史（保持完整性，便于审计/重放）
+                    messages.append(message)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", tool_name),
+                        "content": json.dumps(result, ensure_ascii=False, default=str),
+                    })
+                    return {
+                        "collected_items": current_state.get("collected_items", items),
+                        "ranked_items": ranked_items,
+                        "ranking_detail": ranking_detail,
+                        "item_relations": current_state.get("item_relations", []),
+                        "ranking_summary": summary,
+                    }
+
+                messages.append(message)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", tool_name),
+                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                })
+        else:
+            content = message.get("content", "")
+            print(f"[ranking_react] LLM 未调用工具，回复: {content[:100]}", flush=True)
+            if content and turn < max_turns - 1:
+                # 安全处理：清除可能残留的 tool_calls 字段，防止下轮 API 400 错误
+                safe_message = {k: v for k, v in message.items() if k != "tool_calls"}
+                messages.append(safe_message)
+                messages.append({"role": "user", "content": "请调用工具执行去重和排序，完成后调用 finish_task。"})
+                continue
+            break
+
+    # 兜底
+    print(f"[ranking_react] 超过 {max_turns} 轮未完成，强制返回", flush=True)
+    return {
+        "collected_items": current_state.get("collected_items", items),
+        "ranked_items": ranked_items,
+        "ranking_detail": ranking_detail,
+        "item_relations": current_state.get("item_relations", []),
+        "ranking_summary": "超时结束",
+    }
+
+
+# ============================================================
+# 兼容接口
+# ============================================================
+
+class _ReActAgentWrapper:
+    def __init__(self, fn):
+        self._fn = fn
+
+    def invoke(self, state: dict) -> dict:
+        return self._fn(state)
+
+
 def build_ranking_agent():
-    """构建排序 Agent StateGraph。"""
-    workflow = StateGraph(FeedLensState)
-
-    workflow.add_node("vector_search", vector_search_node)
-    workflow.add_node("deduplicate", deduplicate_node)
-    workflow.add_node("rank_items", rank_items_node)
-
-    workflow.set_entry_point("vector_search")
-    workflow.add_edge("vector_search", "deduplicate")
-    workflow.add_edge("deduplicate", "rank_items")
-
-    # 条件边: 排序质量不够 → 调参重排
-    workflow.add_conditional_edges(
-        "rank_items",
-        should_rerank,
-        {"rank_items": "rank_items", "__end__": END},
-    )
-
-    return workflow.compile()
+    """构建排序 Agent（兼容旧接口）。"""
+    return _ReActAgentWrapper(run_ranking_agent)

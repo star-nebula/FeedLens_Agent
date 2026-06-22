@@ -110,6 +110,58 @@ params 可选值：search_expand(含 query), retry, rerank, expand_threshold 等
 
 
 # ============================================================
+# Router System Prompt（LLM 动态路由决策）
+# ============================================================
+
+ROUTER_SYSTEM_PROMPT = """你是 FeedLens 的自主路由决策者。根据当前 Agent 运行状态和上下文，决定下一步跳转到哪个节点。
+
+## 可跳转节点
+
+- "planner": 需要（重新）编排子 Agent 执行计划
+- "invoke_sub_agent": 执行 planner 编排的子 Agent（sub_agent_plan 非空且 sub_agent_executed=false）
+- "observe_results": 子 Agent 执行完毕，观察评估结果质量
+- "coordinator_reflect": 综合质量审查（完整性+去重+追溯+矛盾检查）
+- "push_notification": 简报已就绪，执行推送
+- "update_memory": 记录执行日志、更新偏好向量并结束流程
+- "abort": 放弃本次执行（多次重试失败或数据始终为0）
+- "END": 流程已完全结束
+
+## 决策规则（按优先级，必须严格遵守）
+
+1. sub_agent_executed=true 且 observation 为空 → "observe_results"（子Agent刚执行完，必须评估结果）
+2. sub_agent_plan 非空且 sub_agent_executed=false → "invoke_sub_agent"（执行计划中的子Agent）
+3. observe_results 完成、needs_retry=true 且 react_cycle_count < 3 → "planner"（ReAct重试）
+4. observe_results 完成、needs_retry=false 或已达最大循环 → "coordinator_reflect"
+5. coordinator_reflect 完成、overall_pass=true → "push_notification"
+6. coordinator_reflect 完成、overall_pass=false 且 react_cycle_count < 3 → "planner"（重新编排）
+7. coordinator_reflect 完成、overall_pass=false 且已达最大循环 → "push_notification"（强制推送）
+8. push_notification 完成 → "update_memory"
+9. update_memory 完成 → "END"
+10. 多次重试失败或采集始终为0 → "abort"
+
+## 状态上下文字段说明
+
+- sub_agent_plan: 当前编排计划列表（执行完毕后会被清空）
+- sub_agent_plan_count: 计划中的子Agent数量
+- sub_agent_executed: 本轮计划是否已执行（true=已执行完，false=未执行）
+- collected_count: 已采集条目数
+- ranked_count: 已排序条目数
+- react_cycle_count: ReAct循环计数（max=3）
+- agentic_turn_count: 主循环总轮数
+- observation: observe_results输出（含 needs_retry, issues 等）
+- coordinator_observation: 综合审查结果（含 overall_pass, issues 等）
+- push_status: 推送状态（空/sent/failed）
+- status: 当前流程状态（running/completed/failed）
+- brief_quality: 简报质量评分
+
+## 输出格式
+
+严格返回 JSON，不加任何解释：
+{"next_node": "planner", "reason": "一句话中文理由"}
+"""
+
+
+# ============================================================
 # 节点定义
 # ============================================================
 
@@ -172,7 +224,13 @@ def understand_intent_node(state: FeedLensState) -> dict:
 
 直接输出 JSON，不要有额外解释。"""
             resp = llm.chat([{"role": "user", "content": prompt}])
-            content = (resp if isinstance(resp, str) else resp.get("content", "")).strip()
+            # 兼容 LLMRouter 不同 provider 的返回格式差异
+            if isinstance(resp, str):
+                content = resp.strip()
+            elif isinstance(resp, dict):
+                content = (resp.get("content") or "").strip()
+            else:
+                content = ""
             # 提取 JSON
             if "{" in content:
                 json_str = content[content.index("{"):content.rindex("}")+1]
@@ -222,7 +280,13 @@ def planner_node(state: FeedLensState) -> dict:
             {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
         ]
         response = llm.chat(messages, temperature=0.3, max_tokens=1024)
-        text = response if isinstance(response, str) else response.get("content", "{}")
+        # 兼容 LLMRouter 不同 provider 的返回格式差异
+        if isinstance(response, str):
+            text = response
+        elif isinstance(response, dict):
+            text = response.get("content") or "{}"
+        else:
+            text = "{}"
         plan = _parse_planner_response(text)
         print(f"[planner] LLM 决策: {json.dumps(plan, ensure_ascii=False)}", flush=True)
     except Exception as e:
@@ -234,6 +298,8 @@ def planner_node(state: FeedLensState) -> dict:
 
     return {
         "sub_agent_plan": plan.get("sub_agent_plan", []),
+        "sub_agent_executed": False,  # 新计划尚未执行
+        "observation_result": {},  # 清除旧观察结果，等待新一轮评估
         "push_immediate": plan.get("push_immediate", False),
         "planner_reason": plan.get("reason", ""),
     }
@@ -336,6 +402,189 @@ def _fallback_plan(state: FeedLensState) -> dict:
     }
 
 
+def _parse_router_response(text: str) -> dict:
+    """容错解析 LLM 路由决策，三层降级，必须返回有效 dict。
+
+    Layer 1: 直接 json.loads
+    Layer 2: regex 提取第一个 {...} 再 json.loads
+    Layer 3: 兜底返回 planner
+    """
+    # Layer 1: 直接解析
+    try:
+        decision = json.loads(text)
+        if isinstance(decision, dict) and "next_node" in decision:
+            return decision
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # Layer 2: regex 提取 JSON 块
+    import re as _re
+    match = _re.search(r'\{[^{}]*"next_node"\s*:\s*"[^"]*"[^{}]*\}', text)
+    if match:
+        try:
+            decision = json.loads(match.group())
+            if isinstance(decision, dict) and "next_node" in decision:
+                return decision
+        except (json.JSONDecodeError, TypeError):
+            pass
+    # 更宽松的 regex 提取
+    match = _re.search(r'\{[\s\S]*\}', text)
+    if match:
+        try:
+            decision = json.loads(match.group())
+            if isinstance(decision, dict) and "next_node" in decision:
+                return decision
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # Layer 3: 兜底
+    print(f"[router] JSON 解析全部失败，降级到 planner。原始响应: {text[:200]}", flush=True)
+    return {"next_node": "planner", "reason": "router parse fallback"}
+
+
+def _build_router_context(state: FeedLensState) -> dict:
+    """构建 router_node 的 LLM 输入上下文。"""
+    plan = state.get("sub_agent_plan", [])
+    obs = state.get("observation_result", {})
+    coordinator_obs = state.get("coordinator_observation", {})
+    push_status = state.get("push_status", "")
+    status = state.get("status", "running")
+
+    return {
+        "sub_agent_plan": plan,
+        "sub_agent_plan_count": len(plan),
+        "sub_agent_executed": state.get("sub_agent_executed", False),
+        "collected_count": len(state.get("collected_items", [])),
+        "ranked_count": len(state.get("ranked_items", [])),
+        "react_cycle_count": state.get("react_cycle_count", 0),
+        "agentic_turn_count": state.get("agentic_turn_count", 0),
+        "observation": obs,
+        "coordinator_observation": coordinator_obs,
+        "push_status": push_status,
+        "status": status,
+        "brief_quality": state.get("brief_quality", 0.0),
+        "trigger_type": state.get("trigger_type", "daily_briefing"),
+    }
+
+
+def _fallback_router_decision(state: FeedLensState) -> str:
+    """LLM 返回空内容时的规则路由降级（不依赖 LLM 的确定性路由）。
+
+    按优先级判断下一步：
+    1. plan 非空且未执行 → invoke_sub_agent
+    2. plan 已执行但未观察 → observe_results
+    3. 已观察、需重试且未达上限 → planner
+    4. 已观察、不需重试 → coordinator_reflect
+    5. coordinator 审查通过 → push_notification
+    6. push 完成 → update_memory
+    7. 其他 → update_memory
+    """
+    plan = state.get("sub_agent_plan", [])
+    executed = state.get("sub_agent_executed", False)
+    obs = state.get("observation_result", {})
+    coordinator_obs = state.get("coordinator_observation", {})
+    push_status = state.get("push_status", "")
+    react_cycle = state.get("react_cycle_count", 0)
+
+    # 1. 有未执行的计划
+    if plan and not executed:
+        return '{"next_node": "invoke_sub_agent", "reason": "规则降级：执行计划中的子Agent"}'
+
+    # 2. 已执行但未观察
+    if executed and not obs:
+        return '{"next_node": "observe_results", "reason": "规则降级：子Agent执行完毕，评估结果"}'
+
+    # 3. 已观察，需要重试且未达上限
+    if obs.get("needs_retry") and react_cycle < 3:
+        return '{"next_node": "planner", "reason": "规则降级：需要重新编排"}'
+
+    # 4. 已观察，无需重试 → 综合审查
+    if obs and not obs.get("needs_retry", False):
+        return '{"next_node": "coordinator_reflect", "reason": "规则降级：进入综合审查"}'
+
+    # 5. 综合审查通过 → 推送
+    if coordinator_obs.get("overall_pass") and not push_status:
+        return '{"next_node": "push_notification", "reason": "规则降级：审查通过，推送简报"}'
+
+    # 6. 推送完成 → 记忆写入
+    if push_status == "sent":
+        return '{"next_node": "update_memory", "reason": "规则降级：推送完成，写入记忆"}'
+
+    # 7. 兜底：写入记忆结束
+    return '{"next_node": "update_memory", "reason": "规则降级：兜底结束流程"}'
+
+
+def router_node(state: FeedLensState) -> dict:
+    """LLM 动态路由决策节点。
+
+    防死循环 + 硬兜底 + LLM 自主决策，返回 next_node 路由目标。
+
+    Returns:
+        router_decision: {"next_node": "...", "reason": "..."}
+        router_history: 追加后的历史决策列表
+        agentic_turn_count: 递增后的循环计数
+    """
+    from agents.state import FeedLensState as _FS
+
+    # 防死循环：检查最近 3 次决策是否相同
+    recent = state.get("router_history", [])[-3:]
+    if len(recent) >= 3 and len(set(d.get("next_node", "") for d in recent)) == 1:
+        same_node = recent[0].get("next_node", "unknown")
+        print(f"[router] 死循环检测：连续 3 次路由到 {same_node}，强制结束", flush=True)
+        return {
+            "router_decision": {"next_node": "update_memory", "reason": f"死循环检测：连续3次{same_node}"},
+            "router_history": state.get("router_history", []) + [
+                {"next_node": "update_memory", "reason": f"死循环检测：连续3次{same_node}"}
+            ],
+            "agentic_turn_count": state.get("agentic_turn_count", 0) + 1,
+        }
+
+    # 硬兜底：超过 max_turns
+    max_turns = 8
+    if state.get("agentic_turn_count", 0) >= max_turns:
+        print(f"[router] 超过最大轮数 {max_turns}，强制结束", flush=True)
+        return {
+            "router_decision": {"next_node": "update_memory", "reason": f"超过最大轮数{max_turns}"},
+            "router_history": state.get("router_history", []) + [
+                {"next_node": "update_memory", "reason": f"超过最大轮数{max_turns}"}
+            ],
+            "agentic_turn_count": state.get("agentic_turn_count", 0) + 1,
+        }
+
+    # 构建状态摘要
+    context = _build_router_context(state)
+
+    try:
+        llm = _get_llm_provider()
+        messages = [
+            {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
+            {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
+        ]
+        response = llm.chat(messages, temperature=0.1, max_tokens=512)
+        # 兼容 LLMRouter 不同 provider 的返回格式差异
+        if isinstance(response, str):
+            text = response
+        elif isinstance(response, dict):
+            text = response.get("content") or "{}"
+        else:
+            text = "{}"
+        # 空响应处理：某些模型（如 deepseek-v4-flash）可能返回空字符串
+        if not text or not text.strip():
+            print(f"[router] LLM 返回空内容，降级到规则路由", flush=True)
+            text = _fallback_router_decision(state)
+        decision = _parse_router_response(text)
+        print(f"[router] LLM 决策: {json.dumps(decision, ensure_ascii=False)}", flush=True)
+    except Exception as e:
+        print(f"[router] LLM 调用失败，降级到 planner: {e}", flush=True)
+        decision = {"next_node": "planner", "reason": f"LLM 调用失败: {e}"}
+
+    return {
+        "router_decision": decision,
+        "router_history": state.get("router_history", []) + [decision],
+        "agentic_turn_count": state.get("agentic_turn_count", 0) + 1,
+    }
+
+
 def invoke_sub_agent_node(state: FeedLensState) -> dict:
     """根据 sub_agent_plan 顺序调度执行子 Agent StateGraph。
 
@@ -354,6 +603,8 @@ def invoke_sub_agent_node(state: FeedLensState) -> dict:
 
     results = {}
     current_state = dict(state)
+    # 记录各子 Agent 执行状态：成功(success) / 失败(isolated) / 未执行(not_executed)
+    agent_status = {}
 
     for step in plan:
         agent_name = step.get("agent", "")
@@ -370,6 +621,7 @@ def invoke_sub_agent_node(state: FeedLensState) -> dict:
 
         if builder is None:
             print(f"[invoke_sub_agent] 未知子 Agent: {agent_name}", flush=True)
+            agent_status[agent_name] = "not_executed"
             continue
 
         result_key = {"Collection": "collection_result", "Ranking": "ranking_result", "Briefing": "briefing_result"}[agent_name]
@@ -384,6 +636,7 @@ def invoke_sub_agent_node(state: FeedLensState) -> dict:
         if isinstance(result, dict) and result:
             current_state.update(result)
             results[result_key] = result
+            agent_status[agent_name] = "success"
             if agent_name == "Collection":
                 print(f"[invoke_sub_agent] Collection 完成: {len(result.get('collected_items', []))} 条", flush=True)
             elif agent_name == "Ranking":
@@ -393,22 +646,35 @@ def invoke_sub_agent_node(state: FeedLensState) -> dict:
         else:
             # 隔离返回默认值 {}（子 Agent 失败已记录日志），保留错误标记供 observe_results 评估
             results[f"{agent_name.lower()}_error"] = "isolated_failure"
+            agent_status[agent_name] = "isolated"
             print(f"[invoke_sub_agent] {agent_name} 已隔离降级（返回默认空结果）", flush=True)
 
     # 将子 Agent 执行结果同步到顶层字段
-    return {
+    # 关键：仅将本轮成功执行的结果写入 state，失败的子 Agent 对应字段不覆盖（保留旧值供观察）
+    # 但通过 agent_status 记录各 Agent 状态，供 observe_results 区分「失败」和「未执行」
+    return_update = {
+        "sub_agent_plan": [],  # 清空计划，防止 router 认为"尚未执行"而反复路由
+        "sub_agent_executed": True,  # 标记本轮计划已执行，供 router 决策
         "current_sub_agent": plan[-1].get("agent", "") if plan else "",
-        "collected_items": current_state.get("collected_items", []),
-        "ranked_items": current_state.get("ranked_items", []),
-        "deduped_items": current_state.get("deduped_items", []),
-        "item_relations": current_state.get("item_relations", []),
-        "ranking_detail": current_state.get("ranking_detail", {}),
         "collection_result": results.get("collection_result", {}),
         "ranking_result": results.get("ranking_result", {}),
         "briefing_result": results.get("briefing_result", {}),
-        "brief_quality": current_state.get("brief_quality", 0.0),
-        "quality_detail": current_state.get("quality_detail", {}),
+        "agent_status": agent_status,  # 新增：各子 Agent 执行状态
     }
+
+    # 仅当对应子 Agent 成功执行时才覆盖数据字段，防止隔离失败时残留旧数据
+    if agent_status.get("Collection") == "success":
+        return_update["collected_items"] = current_state.get("collected_items", [])
+    if agent_status.get("Ranking") == "success":
+        return_update["ranked_items"] = current_state.get("ranked_items", [])
+        return_update["deduped_items"] = current_state.get("deduped_items", [])
+        return_update["item_relations"] = current_state.get("item_relations", [])
+        return_update["ranking_detail"] = current_state.get("ranking_detail", {})
+    if agent_status.get("Briefing") == "success":
+        return_update["brief_quality"] = current_state.get("brief_quality", 0.0)
+        return_update["quality_detail"] = current_state.get("quality_detail", {})
+
+    return return_update
 
 
 def observe_results_node(state: FeedLensState) -> dict:
@@ -420,7 +686,8 @@ def observe_results_node(state: FeedLensState) -> dict:
     collected = state.get("collected_items", [])
     ranked = state.get("ranked_items", [])
     ranking_detail = state.get("ranking_detail", {})
-    brief_quality = state.get("brief_quality", 1.0)
+    # 简报质量默认 0.0：若 Briefing 从未被调度，不应误判为"质量完美"
+    brief_quality = state.get("brief_quality", 0.0)
     react_cycle = state.get("react_cycle_count", 0)
     ctx = hooks.run("observe.evaluate", {
         "collected": collected,
@@ -713,58 +980,6 @@ def update_memory_node(state: FeedLensState) -> dict:
 
 
 # ============================================================
-# 条件边
-# ============================================================
-
-
-def should_continue_react(state: FeedLensState) -> str:
-    """判断是否继续 ReAct 循环。
-
-    observe_results 之后调用：
-      - needs_retry=True 且 react_cycle_count < max_react_cycles → 回退 planner
-      - 否则 → coordinator_reflect
-    """
-    obs = state.get("observation_result", {})
-    cycle = state.get("react_cycle_count", 0)
-    max_cycles = 3
-
-    if obs.get("needs_retry") and cycle < max_cycles:
-        print(f"[should_continue_react] ReAct 第 {cycle} 轮，观察建议重试，进入下一轮", flush=True)
-        return "planner"
-
-    print(f"[should_continue_react] ReAct 结束，进入 coordinator_reflect", flush=True)
-    return "coordinator_reflect"
-
-
-def should_push_now(state: FeedLensState) -> str:
-    """判断是否立即推送（重大事件）。
-
-    策略逻辑已提取为 push.decide hook（P1），可注册自定义推送策略
-    （如特定主题破例推送、夜间静默等）。
-
-    当前设计：所有情况都走 push_notification 节点，
-    push_immediate 标记仅影响推送 urgency（立即 vs 排队）。
-    """
-    push_immediate = state.get("push_immediate", False)
-    ctx = hooks.run("push.decide", {
-        "push_immediate": push_immediate,
-        "trigger_type": state.get("trigger_type", "daily_briefing"),
-    })
-    immediate = ctx.get("push_immediate", push_immediate)
-
-    if immediate:
-        print(f"[should_push_now] 重大事件，立即推送", flush=True)
-    else:
-        print(f"[should_push_now] 日常简报，正常推送", flush=True)
-    return "push_notification"
-# ============================================================
-# StateGraph 构建
-# ============================================================
-
-
-
-
-# ============================================================
 # P1 默认 Hook 实现（策略注册，提取硬编码逻辑为可替换 Hook）
 # ============================================================
 
@@ -778,7 +993,8 @@ def _default_observe_evaluate(ctx: dict) -> dict:
     collected = ctx.get("collected", [])
     ranked = ctx.get("ranked", [])
     top_score = ctx.get("top_score", 0)
-    brief_quality = ctx.get("brief_quality", 1.0)
+    # 简报质量默认 0.0：若 Briefing 从未被调度，不应误判为"质量完美"
+    brief_quality = ctx.get("brief_quality", 0.0)
     th_coll = ctx.get("threshold_collection", 3)
     th_rank = ctx.get("threshold_ranking", 0.3)
     th_brief = ctx.get("threshold_briefing", 0.7)
@@ -786,7 +1002,8 @@ def _default_observe_evaluate(ctx: dict) -> dict:
 
     collection_ok = len(collected) >= th_coll
     ranking_ok = bool(ranked and top_score >= th_rank)
-    briefing_ok = brief_quality >= th_brief
+    # 简报质量评估：需同时检查 brief_quality > 0（是否真正生成）和评分达标
+    briefing_ok = brief_quality > 0 and brief_quality >= th_brief
     briefing_count_ok = len(ranked) >= expected
     suggest_expand = (not briefing_count_ok) and (len(collected) >= expected)
     needs_retry = not (collection_ok and ranking_ok and briefing_ok and briefing_count_ok)
@@ -798,7 +1015,10 @@ def _default_observe_evaluate(ctx: dict) -> dict:
         suggested_action = "search_expand"
     if not ranking_ok:
         issues.append(f"排序不佳: top_score={top_score:.2f} < {th_rank}")
-    if not briefing_ok:
+    if brief_quality <= 0:
+        issues.append("简报未生成")
+        suggested_action = suggested_action or "briefing"
+    elif not briefing_ok:
         issues.append(f"简报质量低: score={brief_quality:.2f} < {th_brief}")
     if not briefing_count_ok:
         issues.append(f"简报条目不足: {len(ranked)}/{expected}")
@@ -903,48 +1123,103 @@ def _default_push_decide(ctx: dict) -> dict:
     return {"push_immediate": ctx.get("push_immediate", False)}
 
 hooks.register("push.decide", _default_push_decide)
-def build_main_agent() -> StateGraph:
-    """构建主 Agent StateGraph。
 
-    流程: understand_intent → planner → invoke_sub_agent → observe_results
-                     ↑                                              ↓
-                     └──────────── ReAct 循环 (< 3 次) ────────────┘
-                                                                    ↓
-                                           coordinator_reflect → should_push_now?
-                                                                            ↓
-                                              push_notification → update_memory → END
+
+# ============================================================
+# 路由决策函数（从 router_decision 解析 next_node）
+# ============================================================
+
+def _router_decide(state: FeedLensState) -> str:
+    """条件边函数：从 state.router_decision 中读取 LLM 决策的 next_node。
+
+    供 add_conditional_edges 使用，将 LLM 动态决策映射为 LangGraph 路由目标。
+    """
+    decision = state.get("router_decision", {})
+    next_node = decision.get("next_node", "planner")
+
+    # 验证目标节点是否合法
+    valid_nodes = {
+        "planner", "invoke_sub_agent", "observe_results",
+        "coordinator_reflect", "push_notification", "update_memory",
+        "abort", "END",
+    }
+    if next_node not in valid_nodes:
+        print(f"[router_decide] 非法目标节点 '{next_node}'，降级为 planner", flush=True)
+        next_node = "planner"
+
+    return next_node
+
+
+def build_main_agent() -> StateGraph:
+    """构建主 Agent StateGraph（Agentic 升级：LLM 全动态路由）。
+
+    Phase 4b 流程（所有边由 router_node LLM 决策）:
+      understand_intent → planner → router_node → invoke_sub_agent / planner
+                              ↑                         ↓
+                              └─── ReAct 循环 ──────────┘
+                                                         ↓
+                              router_node → observe_results → router_node
+                                                                   ↓
+                                          coordinator_reflect → router_node
+                                                                   ↓
+                                          push_notification → router_node
+                                                                   ↓
+                                          update_memory → END
+
+    关键改造：
+      - 所有节点之间的跳转均由 router_node（LLM）自主决策
+      - 保留防死循环（连续3次相同路由 → 强制 update_memory）
+      - 保留硬兜底（agentic_turn_count >= 8 → 强制结束）
+      - observe_results / coordinator_reflect 仍做质量评估，但路由交给 router_node
     """
     workflow = StateGraph(FeedLensState)
 
-    # 节点
+    # 节点注册
     workflow.add_node("understand_intent", understand_intent_node)
     workflow.add_node("planner", planner_node)
+    workflow.add_node("router_node", router_node)
     workflow.add_node("invoke_sub_agent", invoke_sub_agent_node)
     workflow.add_node("observe_results", observe_results_node)
     workflow.add_node("coordinator_reflect", coordinator_reflect_node)
     workflow.add_node("push_notification", push_notification_node)
     workflow.add_node("update_memory", update_memory_node)
 
-    # 主流程
+    # 入口：understand_intent → planner（初始计划生成固定先走 planner）
     workflow.set_entry_point("understand_intent")
     workflow.add_edge("understand_intent", "planner")
-    workflow.add_edge("planner", "invoke_sub_agent")
-    workflow.add_edge("invoke_sub_agent", "observe_results")
 
-    # ReAct 循环条件边
+    # planner → router_node（LLM 决策：invoke_sub_agent 还是重新 planner）
+    workflow.add_edge("planner", "router_node")
+
+    # router_node 条件边：LLM 自主路由到所有目标节点
     workflow.add_conditional_edges(
-        "observe_results",
-        should_continue_react,
-        {"planner": "planner", "coordinator_reflect": "coordinator_reflect"},
+        "router_node",
+        _router_decide,
+        {
+            "planner": "planner",
+            "invoke_sub_agent": "invoke_sub_agent",
+            "observe_results": "observe_results",
+            "coordinator_reflect": "coordinator_reflect",
+            "push_notification": "push_notification",
+            "update_memory": "update_memory",
+            "abort": END,
+            "END": END,
+        },
     )
 
-    # coordinator_reflect 之后：重大事件立即推送，日常简报正常推送
-    workflow.add_conditional_edges(
-        "coordinator_reflect",
-        should_push_now,
-        {"push_notification": "push_notification", "update_memory": "update_memory"},
-    )
-    workflow.add_edge("push_notification", "update_memory")
+    # invoke_sub_agent 执行完后 → router_node（LLM 决定走向 observe 还是重新 planner）
+    workflow.add_edge("invoke_sub_agent", "router_node")
+
+    # observe_results 评估完后 → router_node（LLM 决定继续 ReAct 还是进入 coordinator_reflect）
+    workflow.add_edge("observe_results", "router_node")
+
+    # coordinator_reflect 审查完后 → router_node（LLM 决定推送还是重做）
+    workflow.add_edge("coordinator_reflect", "router_node")
+
+    # push_notification 推送完后 → router_node（LLM 决定 update_memory 还是结束）
+    workflow.add_edge("push_notification", "router_node")
+
+    # update_memory → END（固定终点）
     workflow.add_edge("update_memory", END)
 
     return workflow.compile()

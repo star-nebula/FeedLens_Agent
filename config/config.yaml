@@ -7,7 +7,7 @@ llm:
   deepseek:
     api_key: ${DEEPSEEK_API_KEY}         # DeepSeek API Key
     base_url: https://api.deepseek.com/v1
-    model: deepseek-chat
+    model: deepseek-v4-flash
   # P4 模型回退：主 LLM 不可用时自动切换备用 Provider（留空则不启用回退）
   fallback:
     api_key: ${ALTERNATIVE_API_KEY}      # 备用 key（可用另一账号或兼容 OpenAI 接口的服务）

@@ -1,20 +1,21 @@
 """
-采集 Agent — RSS 采集 + 搜索补充 + 元数据提取 + 标准化。
+采集 Agent — ReAct 循环实现（Agentic 升级规划2 Phase 3a）。
 
-工作流: fetch_rss → (search_web?) → enrich_metadata → normalize_items
-ReAct: 判断是否需要补充搜索 → 执行 → 评估
+从 StateGraph 改为 ReAct 循环：LLM Thought → function_call → Observation → ... → finish_task
+
+工具列表: fetch_rss, search_web, enrich_metadata, normalize_items, finish_task
 """
 
+import json
 import os
 from datetime import datetime
-import asyncio
 from typing import List, Dict, Any
 
 from langgraph.graph import StateGraph, END
 from utils.config import load_config
 from agents.state import FeedLensState
 from tools import fetch_rss, enrich_metadata, normalize_items
-from tools.mcp_client import SearchMCPClient
+from tools.tool_registry import tool_registry
 from utils.llm_provider import DeepSeekProvider
 
 
@@ -23,22 +24,20 @@ from utils.llm_provider import DeepSeekProvider
 # ============================================================
 
 DEFAULT_RSS_SOURCES = [
-    # 科技资讯（中文，通过 RSSHub）
     "https://rsshub.app/solidot/",
     "https://rsshub.app/36kr/information/web_news/",
     "https://rsshub.app/36kr/news/latest",
     "https://rsshub.app/zhihu/daily",
     "https://rsshub.app/v2ex/topics/latest",
-    # 国际科技
     "https://feeds.bbci.co.uk/news/technology/rss.xml",
-    # 开源与开发者动态
     "https://rsshub.app/github/trending/daily",
 ]
 
-
 # ============================================================
+# 配置辅助
+# ============================================================
+
 def _get_llm_provider() -> DeepSeekProvider:
-    """根据配置创建 LLM Provider。"""
     config = load_config()
     llm_cfg = config.get("llm", {})
     deepseek_cfg = llm_cfg.get("deepseek", {})
@@ -50,12 +49,7 @@ def _get_llm_provider() -> DeepSeekProvider:
 
 
 def _get_rss_sources(state: FeedLensState) -> List[str]:
-    """获取 RSS 源列表：
-    1. 优先从数据库 sources 表读取用户添加的活跃源
-    2. 其次使用 structured_goal 中的 preferred_sources
-    3. 最后使用 DEFAULT_RSS_SOURCES 兜底
-    """
-    # 1. 从数据库读取用户配置的活跃源
+    """获取 RSS 源列表：数据库 > structured_goal > DEFAULT。"""
     try:
         from models.database import Database
         db = Database("data/feedlens.db")
@@ -70,7 +64,6 @@ def _get_rss_sources(state: FeedLensState) -> List[str]:
     except Exception as e:
         print(f"[fetch_rss] 读取 sources 表失败: {e}", flush=True)
 
-    # 2. 使用 structured_goal 中的 preferred_sources
     structured_goal = state.get("structured_goal", {})
     preferred = structured_goal.get("preferred_sources", [])
     if preferred:
@@ -91,149 +84,197 @@ def _get_search_query(state: FeedLensState) -> str:
 
 
 # ============================================================
-# 节点定义
+# System Prompt
 # ============================================================
 
+COLLECTION_SYSTEM_PROMPT = """你是 FeedLens 的采集 Agent。你的目标是从多个来源采集信息。
 
-def fetch_rss_node(state: FeedLensState) -> dict:
-    """并行采集多个 RSS 源（feedparser）。"""
-    sources = _get_rss_sources(state)
-    print(f"[fetch_rss] 开始采集 {len(sources)} 个 RSS 源...", flush=True)
+可用工具：
+- fetch_rss: 并行采集多个 RSS 源的内容
+- search_web: 通过搜索引擎补充采集内容（当 RSS 采集量不足时使用）
+- enrich_metadata: 使用 LLM 对条目提取分类、关键词、重要性评分
+- normalize_items: 统一条目字段格式
+- finish_task: 标记采集完成，返回结果摘要
 
-    try:
-        raw_items = fetch_rss(sources, max_workers=5)
-        # 过滤掉带 error 的条目
-        valid_items = [item for item in raw_items if "error" not in item]
-        print(f"[fetch_rss] 采集完成: {len(valid_items)} 条有效 / {len(raw_items)} 条总计", flush=True)
-        return {"collected_items": valid_items}
-    except Exception as e:
-        print(f"[fetch_rss] 采集失败: {e}", flush=True)
-        return {"collected_items": [], "error": f"fetch_rss failed: {e}"}
+工作流程建议：
+1. 先调用 fetch_rss 采集 RSS 源
+2. 如果采集量 < 5 条，调用 search_web 补充搜索
+3. 调用 enrich_metadata 提取元数据
+4. 调用 normalize_items 标准化字段
+5. 调用 finish_task 结束
+
+你可以根据实际情况调整顺序。完成后必须调用 finish_task。"""
 
 
-def search_web_node(state: FeedLensState) -> dict:
-    """条件触发：collected_items < 5 时补充 MCP search_web 搜索。
+# ============================================================
+# ReAct 采集函数
+# ============================================================
 
-    同步实现：通过 asyncio.run 驱动异步 MCP 客户端，
-    以兼容同步编译的 LangGraph StateGraph（避免在 sync .invoke() 中返回协程）。
+def run_collection_agent(state: FeedLensState) -> dict:
+    """ReAct 采集 Agent — LLM 自主调用工具完成采集任务。
+
+    Args:
+        state: FeedLensState，包含 goal_text, structured_goal 等
+
+    Returns:
+        dict: {collected_items, search_supplemented, collection_summary}
     """
-    query = _get_search_query(state)
-    print(f"[search_web] 补充搜索: {query}", flush=True)
+    llm = _get_llm_provider()
+    tools = tool_registry.get_schemas_for_phase("collection")
 
-    async def _do_search():
-        client = SearchMCPClient(base_url="http://127.0.0.1:8100")
-        async with client:
-            return await client.search(query, max_results=5)
+    # 构建初始消息
+    goal_text = state.get("goal_text", "收集最新科技资讯")
+    structured_goal = state.get("structured_goal", {})
+    sources = _get_rss_sources(state)
 
-    try:
-        search_results = asyncio.run(_do_search())
+    user_msg = f"用户目标: {goal_text}\n"
+    if structured_goal.get("topics"):
+        user_msg += f"关注主题: {', '.join(structured_goal['topics'])}\n"
+    if structured_goal.get("keywords"):
+        user_msg += f"关键词: {', '.join(structured_goal['keywords'])}\n"
+    user_msg += f"可用 RSS 源: {sources[:5]}...\n"
 
-        # 将 MCP 搜索结果转换为统一格式
-        converted = []
-        for r in search_results:
-            converted.append({
-                "source_url": r.get("source", "web_search"),
-                "title": r.get("title", ""),
-                "summary": r.get("snippet", ""),
-                "content": r.get("snippet", ""),
-                "url": r.get("url", ""),
-                "published_at": datetime.now().isoformat(),
-            })
+    messages = [
+        {"role": "system", "content": COLLECTION_SYSTEM_PROMPT},
+        {"role": "user", "content": user_msg},
+    ]
 
-        existing = state.get("collected_items", [])
-        merged = existing + converted
-        print(f"[search_web] 补充 {len(converted)} 条，合并后共 {len(merged)} 条", flush=True)
-        return {
-            "collected_items": merged,
-            "search_supplemented": True,
-        }
-    except Exception as e:
-        print(f"[search_web] 搜索失败: {e}", flush=True)
-        return {
-            "collected_items": state.get("collected_items", []),
-            "search_supplemented": False,
-            "error": f"search_web failed: {e}",
-        }
+    collected_items = state.get("collected_items", [])
+    search_supplemented = False
+    collection_summary = ""
 
-def enrich_metadata_node(state: FeedLensState) -> dict:
-    """LLM 提取 category / keywords / importance。"""
-    items = state.get("collected_items", [])
-    if not items:
-        return {"collected_items": []}
+    max_turns = 5
+    for turn in range(max_turns):
+        print(f"[collection_react] 第 {turn + 1} 轮思考...", flush=True)
 
-    print(f"[enrich_metadata] 开始增强 {len(items)} 条条目...", flush=True)
-    try:
-        llm = _get_llm_provider()
-        enriched = enrich_metadata(items, llm_provider=llm, batch_size=5)
-        print(f"[enrich_metadata] 增强完成", flush=True)
-        return {"collected_items": enriched}
-    except Exception as e:
-        print(f"[enrich_metadata] 失败: {e}", flush=True)
-        # 失败时返回原始条目，附加默认元数据
-        for item in items:
-            item.setdefault("category", "other")
-            item.setdefault("keywords", "")
-            item.setdefault("importance", 0.5)
-        return {"collected_items": items, "error": f"enrich_metadata failed: {e}"}
+        try:
+            response_dict = llm.chat_with_tools(messages=messages, tools=tools)
+        except Exception as e:
+            print(f"[collection_react] LLM 调用失败: {e}，退出循环", flush=True)
+            break
 
+        # 从 model_dump() dict 提取 choice
+        choices = response_dict.get("choices", [])
+        if not choices:
+            print("[collection_react] LLM 返回空 choices，退出循环", flush=True)
+            break
+        choice = choices[0]
+        message = choice.get("message", {})
+        finish_reason = choice.get("finish_reason", "")
 
-def normalize_items_node(state: FeedLensState) -> dict:
-    """统一字段格式化，输出 collected_items。"""
-    items = state.get("collected_items", [])
-    if not items:
-        return {"collected_items": []}
+        # 检查是否有 tool_calls
+        tool_calls = message.get("tool_calls", [])
+        if tool_calls and finish_reason == "tool_calls":
+            for tc in tool_calls:
+                func = tc.get("function", {})
+                tool_name = func.get("name", "")
+                try:
+                    tool_args = json.loads(func.get("arguments", "{}"))
+                except json.JSONDecodeError:
+                    tool_args = {}
 
-    print(f"[normalize_items] 开始标准化 {len(items)} 条条目...", flush=True)
-    normalized = normalize_items(items)
+                print(f"[collection_react] 调用工具: {tool_name}", flush=True)
 
-    # 统一设置 fetched_at
-    now = datetime.now().isoformat()
-    for item in normalized:
-        item["fetched_at"] = now
+                # 特殊处理：注入 RSS 源列表
+                if tool_name == "fetch_rss" and "sources" not in tool_args:
+                    tool_args["sources"] = _get_rss_sources(state)
+                # 特殊处理：注入搜索查询词
+                if tool_name == "search_web" and "query" not in tool_args:
+                    tool_args["query"] = _get_search_query(state)
+                # 特殊处理：注入已采集条目（enrich/normalize 需要 items 参数）
+                if tool_name in ("enrich_metadata", "normalize_items") and "items" not in tool_args:
+                    tool_args["items"] = collected_items
 
-    print(f"[normalize_items] 标准化完成", flush=True)
-    return {"collected_items": normalized}
+                try:
+                    result = tool_registry.dispatch(tool_name, tool_args)
+                except Exception as e:
+                    result = {"error": str(e)}
+                    print(f"[collection_react] 工具 {tool_name} 失败: {e}", flush=True)
+
+                # 累积结果
+                if tool_name == "fetch_rss":
+                    items = result.get("items", [])
+                    valid = [it for it in items if "error" not in it]
+                    collected_items.extend(valid)
+                elif tool_name == "search_web":
+                    items = result.get("items", [])
+                    if items:
+                        search_supplemented = True
+                    collected_items.extend(items)
+                elif tool_name == "enrich_metadata":
+                    enriched = result.get("items", [])
+                    if enriched:
+                        enriched_map = {it.get("id", ""): it for it in enriched}
+                        for i, item in enumerate(collected_items):
+                            item_id = item.get("id", "")
+                            if item_id in enriched_map:
+                                collected_items[i] = enriched_map[item_id]
+                elif tool_name == "normalize_items":
+                    normalized = result.get("items", [])
+                    if normalized:
+                        collected_items = normalized
+                elif tool_name == "finish_task":
+                    collection_summary = result.get("summary", "")
+                    print(f"[collection_react] 采集完成: {len(collected_items)} 条", flush=True)
+                    # 追加 finish_task 调用记录到 messages 历史（保持完整性，便于审计/重放）
+                    messages.append(message)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", tool_name),
+                        "content": json.dumps(result, ensure_ascii=False, default=str),
+                    })
+                    return {
+                        "collected_items": collected_items,
+                        "search_supplemented": search_supplemented,
+                        "collection_summary": collection_summary,
+                    }
+
+                # 将 assistant message 和 tool result 追加到 messages
+                messages.append(message)
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tc.get("id", tool_name),
+                    "content": json.dumps(result, ensure_ascii=False, default=str),
+                })
+        else:
+            # LLM 没调工具直接回复，视为异常
+            content = message.get("content", "")
+            print(f"[collection_react] LLM 未调用工具，回复: {content[:100]}", flush=True)
+            # 如果 LLM 没有 tool_calls 但有内容，再给它一次机会
+            if content and turn < max_turns - 1:
+                # 安全处理：清除可能残留的 tool_calls 字段，防止下轮 API 400 错误
+                safe_message = {k: v for k, v in message.items() if k != "tool_calls"}
+                messages.append(safe_message)
+                messages.append({"role": "user", "content": "请调用工具执行采集任务，完成后调用 finish_task。"})
+                continue
+            break
+
+    # 兜底：超过 max_turns 未 finish，返回已有数据
+    print(f"[collection_react] 超过 {max_turns} 轮未完成，强制返回 {len(collected_items)} 条", flush=True)
+    return {
+        "collected_items": collected_items,
+        "search_supplemented": search_supplemented,
+        "collection_summary": collection_summary or f"超时结束，共采集 {len(collected_items)} 条",
+    }
 
 
 # ============================================================
-# 条件边
+# 兼容接口：保持 build_collection_agent().invoke(state) 签名
 # ============================================================
 
+class _ReActAgentWrapper:
+    """将 ReAct 函数包装为兼容 StateGraph .invoke() 的对象。"""
 
-def should_search(state: FeedLensState) -> str:
-    """判断是否需要补充搜索。"""
-    items = state.get("collected_items", [])
-    if len(items) < 5:
-        print(f"[should_search] 当前 {len(items)} 条 < 5，触发补充搜索", flush=True)
-        return "search_web"
-    print(f"[should_search] 当前 {len(items)} 条 >= 5，跳过搜索", flush=True)
-    return "enrich_metadata"
+    def __init__(self, fn):
+        self._fn = fn
 
-
-# ============================================================
-# StateGraph 构建
-# ============================================================
+    def invoke(self, state: dict) -> dict:
+        return self._fn(state)
 
 
 def build_collection_agent():
-    """构建采集 Agent StateGraph。"""
-    workflow = StateGraph(FeedLensState)
+    """构建采集 Agent（兼容旧接口）。
 
-    workflow.add_node("fetch_rss", fetch_rss_node)
-    workflow.add_node("search_web", search_web_node)
-    workflow.add_node("enrich_metadata", enrich_metadata_node)
-    workflow.add_node("normalize_items", normalize_items_node)
-
-    workflow.set_entry_point("fetch_rss")
-
-    # 条件边: RSS 后判断是否搜索
-    workflow.add_conditional_edges(
-        "fetch_rss",
-        should_search,
-        {"search_web": "search_web", "enrich_metadata": "enrich_metadata"},
-    )
-    workflow.add_edge("search_web", "enrich_metadata")
-    workflow.add_edge("enrich_metadata", "normalize_items")
-    workflow.add_edge("normalize_items", END)
-
-    return workflow.compile()
+    返回一个具有 .invoke(state) 方法的对象，内部执行 ReAct 循环。
+    """
+    return _ReActAgentWrapper(run_collection_agent)

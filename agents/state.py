@@ -63,3 +63,12 @@ class FeedLensState(TypedDict, total=False):
     # ---- 错误与状态 ----
     error: Optional[str]
     status: str                    # running | completed | failed
+
+    # ---- 路由控制（Agentic 升级规划2 Phase 2 新增）----
+    router_decision: dict[str, Any]       # router_node LLM 决策: {"next_node": "planner", "reason": "..."}
+    router_history: list[dict[str, Any]]  # 路由决策历史列表，用于死循环检测
+    agentic_turn_count: int               # 当前主循环计数，默认 0
+    sub_agent_executed: bool              # 本轮计划是否已执行（planner 设 false，invoke_sub_agent 设 true）
+
+    # ---- 子 Agent 执行状态（invoke_sub_agent 记录各 Agent 成功/失败/未执行）----
+    agent_status: dict[str, str]          # {"Collection": "success|isolated|not_executed", ...}

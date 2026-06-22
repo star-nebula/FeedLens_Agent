@@ -257,29 +257,54 @@ def test_observe_briefing_count_insufficient():
     print(f"  [PASS] 采集足够排序不足 → expand_threshold: {obs['suggested_action']}")
 
 
-def test_should_continue_react_retry():
-    print("\n[test] should_continue_react - 需要重试")
-    state = _mock_state({"observation_result": {"needs_retry": True, "suggested_action": "search_expand"}, "react_cycle_count": 1})
-    result = ma.should_continue_react(state)
-    assert result == "planner", f"期望 planner，实际: {result}"
-    print("  [PASS] needs_retry=True，循环继续 → planner")
+def test_router_retry_scenario():
+    """observe 发现需要重试 → router_node 决策 planner（mock LLM）。"""
+    print("\n[test] router - needs_retry → planner")
+    state = _mock_state({
+        "observation_result": {"needs_retry": True, "suggested_action": "search_expand", "issues": ["采集不足"]},
+        "react_cycle_count": 1,
+        "agentic_turn_count": 1,
+        "collected_items": [{"id": 1}],
+    })
+    mock_llm = unittest.mock.MagicMock()
+    mock_llm.chat.return_value = '{"next_node": "planner", "reason": "采集不足，需要重试"}'
+    with unittest.mock.patch.object(ma, "_get_llm_provider", return_value=mock_llm):
+        result = ma.router_node(state)
+    assert result["router_decision"]["next_node"] == "planner"
+    assert result["agentic_turn_count"] == 2
+    print(f"  [PASS] needs_retry → router→planner, turn={result['agentic_turn_count']}")
 
 
-def test_should_continue_react_stop():
-    print("\n[test] should_continue_react - 停止循环")
-    state = _mock_state({"observation_result": {"needs_retry": False}, "react_cycle_count": 2})
-    result = ma.should_continue_react(state)
-    assert result == "coordinator_reflect", f"期望 coordinator_reflect，实际: {result}"
-    print("  [PASS] needs_retry=False，结束循环 → coordinator_reflect")
+def test_router_stop_scenario():
+    """observe 通过 → router_node 决策 coordinator_reflect（mock LLM）。"""
+    print("\n[test] router - 质量合格 → coordinator_reflect")
+    state = _mock_state({
+        "observation_result": {"needs_retry": False, "issues": []},
+        "react_cycle_count": 2,
+        "agentic_turn_count": 2,
+        "collected_items": [{"id": i} for i in range(10)],
+        "ranked_items": [{"id": i} for i in range(10)],
+        "brief_quality": 0.85,
+    })
+    mock_llm = unittest.mock.MagicMock()
+    mock_llm.chat.return_value = '{"next_node": "coordinator_reflect", "reason": "质量合格，进入综合审查"}'
+    with unittest.mock.patch.object(ma, "_get_llm_provider", return_value=mock_llm):
+        result = ma.router_node(state)
+    assert result["router_decision"]["next_node"] == "coordinator_reflect"
+    print(f"  [PASS] quality_ok → router→coordinator_reflect")
 
 
-def test_should_continue_react_max_cycle():
-    """达到最大循环次数(>=3)时即使 needs_retry=True 也停止。"""
-    print("\n[test] should_continue_react - 达上限强制停止")
-    state = _mock_state({"observation_result": {"needs_retry": True}, "react_cycle_count": 3})
-    result = ma.should_continue_react(state)
-    assert result == "coordinator_reflect", f"达上限应停止: {result}"
-    print("  [PASS] react_cycle>=3 强制结束 → coordinator_reflect")
+def test_router_max_cycle_force_end():
+    """达到最大循环次数 → router_node 强制结束（硬兜底）。"""
+    print("\n[test] router - 达上限强制 update_memory")
+    state = _mock_state({
+        "observation_result": {"needs_retry": True},
+        "react_cycle_count": 3,
+        "agentic_turn_count": 8,  # 触发硬兜底
+    })
+    result = ma.router_node(state)
+    assert result["router_decision"]["next_node"] == "update_memory"
+    print(f"  [PASS] turn=8 → 强制 update_memory")
 
 
 def test_coordinator_reflect_pass():
@@ -362,9 +387,14 @@ def test_react_cycle():
     assert obs_out["observation_result"]["needs_retry"] == True, f"采集不足应重试: {obs_out}"
     obs_out["react_cycle_count"] = 1
     obs_state.update(obs_out)
-    should_continue = ma.should_continue_react(obs_state)
-    assert should_continue == "planner", f"期望继续，实际: {should_continue}"
-    print("    [PASS] 第1轮观察: 采集不足 → 继续 ReAct")
+    obs_state["agentic_turn_count"] = 1
+    obs_state["router_history"] = []
+    mock_llm = unittest.mock.MagicMock()
+    mock_llm.chat.return_value = '{"next_node": "planner", "reason": "采集不足，重新编排"}'
+    with unittest.mock.patch.object(ma, "_get_llm_provider", return_value=mock_llm):
+        router_out = ma.router_node(obs_state)
+    assert router_out["router_decision"]["next_node"] == "planner", f"期望 planner，实际: {router_out['router_decision']}"
+    print("    [PASS] 第1轮观察: 采集不足 → router→planner")
     print("  [Round 2] 重试采集...")
     state["react_cycle_count"] = 1
     state["observation_result"] = obs_out["observation_result"]
@@ -383,9 +413,14 @@ def test_react_cycle():
     assert obs_out3["observation_result"]["needs_retry"] == False, f"Round3 质量合格不应重试: {obs_out3['observation_result']}"
     assert obs_out3["observation_result"]["briefing_count_ok"] == True, f"10 条应 briefing_count_ok: {obs_out3}"
     state.update(obs_out3)
-    should_continue3 = ma.should_continue_react(state)
-    assert should_continue3 == "coordinator_reflect", f"期望结束，实际: {should_continue3}"
-    print("    [PASS] 第3轮观察: 质量合格 → 结束 ReAct")
+    state["agentic_turn_count"] = 2
+    state["router_history"] = []
+    mock_llm3 = unittest.mock.MagicMock()
+    mock_llm3.chat.return_value = '{"next_node": "coordinator_reflect", "reason": "质量合格，进入综合审查"}'
+    with unittest.mock.patch.object(ma, "_get_llm_provider", return_value=mock_llm3):
+        router_out3 = ma.router_node(state)
+    assert router_out3["router_decision"]["next_node"] == "coordinator_reflect", f"期望 coordinator_reflect，实际: {router_out3['router_decision']}"
+    print("    [PASS] 第3轮观察: 质量合格 → router→coordinator_reflect")
     print("  [PASS] ReAct 循环逻辑正确")
 
 
@@ -399,7 +434,7 @@ def main():
         test_planner_fallback_on_llm_failure, test_planner_context_contains_memory, test_planner_context_memory_degradation,
         test_invoke_sub_agent_empty_plan, test_invoke_sub_agent_with_plan,
         test_observe_quality_pass, test_observe_insufficient_collection, test_observe_poor_ranking, test_observe_briefing_count_insufficient,
-        test_should_continue_react_retry, test_should_continue_react_stop, test_should_continue_react_max_cycle,
+        test_router_retry_scenario, test_router_stop_scenario, test_router_max_cycle_force_end,
         test_coordinator_reflect_pass, test_coordinator_reflect_issues,
         test_push_notification_success, test_push_notification_fallback,
         test_update_memory_write_log, test_react_cycle,
