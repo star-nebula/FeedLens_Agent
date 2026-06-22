@@ -42,5 +42,19 @@ class HookRegistry:
         return result
 
 
+def _register_defaults():
+    """注册默认 hook 实现，模块首次导入时自动执行。"""
+    # 延迟导入，避免循环依赖
+    from agents.main_agent import (
+        _default_observe_evaluate,
+        _default_reflect_check,
+        _default_push_decide,
+    )
+    hooks.register("observe.evaluate", _default_observe_evaluate)
+    hooks.register("reflect.check", _default_reflect_check)
+    hooks.register("push.decide", _default_push_decide)
+
+
 # 全局单例
 hooks = HookRegistry()
+_register_defaults()
