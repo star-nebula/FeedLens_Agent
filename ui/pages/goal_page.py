@@ -80,16 +80,59 @@ def _load_current_goal() -> dict:
 
 
 def _save_goal(goal_text: str, topics: list, keywords: list, preferred_sources: list):
-    """保存 Goal。"""
+    """保存 Goal（与已有 Goal 合并追加，而非覆盖）。"""
     db = _get_db()
+    current = _load_current_goal()
+
+    if current:
+        # 合并已有 Goal：拼接 goal_text，合并去重 topics/keywords/preferred_sources
+        old_goal = current["goal_text"] or ""
+        old_topics = _parse_json_field(current.get("topics"), [])
+        old_keywords = _parse_json_field(current.get("keywords"), [])
+        old_sources = _parse_json_field(current.get("preferred_sources"), [])
+
+        # 拼接 goal_text（用分号分隔）
+        merged_goal = f"{old_goal}；{goal_text.strip()}" if old_goal else goal_text.strip()
+
+        # 合并去重（保留原有 + 新增，去重）
+        merged_topics = _dedupe_list(old_topics + topics)
+        merged_keywords = _dedupe_list(old_keywords + keywords)
+        merged_sources = _dedupe_list(old_sources + preferred_sources)
+    else:
+        merged_goal = goal_text.strip()
+        merged_topics = topics
+        merged_keywords = keywords
+        merged_sources = preferred_sources
+
     with db.get_connection() as conn:
         conn.execute(
             """
             INSERT INTO users (goal_text, topics, keywords, preferred_sources)
             VALUES (?, ?, ?, ?)
             """,
-            (goal_text, json.dumps(topics), json.dumps(keywords), json.dumps(preferred_sources)),
+            (merged_goal, json.dumps(merged_topics), json.dumps(merged_keywords), json.dumps(merged_sources)),
         )
+
+
+def _parse_json_field(value, default):
+    """安全解析 JSON 字段。"""
+    if not value:
+        return default
+    try:
+        return json.loads(value) if isinstance(value, str) else value
+    except (json.JSONDecodeError, TypeError):
+        return default
+
+
+def _dedupe_list(items: list) -> list:
+    """去重并保持顺序。"""
+    seen = set()
+    result = []
+    for item in items:
+        if item and item not in seen:
+            seen.add(item)
+            result.append(item)
+    return result
 
 
 def render():
@@ -125,8 +168,10 @@ def render():
 
     st.markdown("---")
 
-    # 设置 / 更新 Goal
-    st.markdown("### ✍️ 设置新 Goal")
+    # 设置 / 追加 Goal
+    st.markdown("### ✍️ 追加新 Goal")
+    if current_goal:
+        st.info("💡 新输入的 Goal 将与已有 Goal 合并追加（非覆盖），主题和关键词自动去重合并。")
     st.markdown("输入您长期关注的目标，系统将用 LLM 自动提取主题、关键词并推荐 RSS 来源。")
     goal_input = st.text_area("Goal 文本", value="", height=120, key="goal_input", help="例如：AI Agent 技术进展 / 新能源车行业动态")
 
@@ -174,7 +219,7 @@ def render():
                         keywords=fields.get("keywords", []),
                         preferred_sources=fields.get("preferred_sources", []),
                     )
-                    st.success("✅ Goal 已保存")
+                    st.success("✅ Goal 已合并保存（与已有 Goal 追加合并）")
                     st.session_state.pop("extracted_goal", None)
                     st.rerun()
                 except Exception as e:

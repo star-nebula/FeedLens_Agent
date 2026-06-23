@@ -152,16 +152,16 @@ class VectorStore:
         documents = []
 
         if like_embedding is not None:
-            ids.append(f"{user_id}_like")
+            ids.append(f"user_{user_id}_like")
             embeddings.append(like_embedding)
-            metadatas.append({"user_id": user_id, "type": "like"})
-            documents.append(f"user_{user_id}_like")
+            metadatas.append({"user_id": user_id, "pref_type": "like"})
+            documents.append(f"User {user_id} positive preferences")
 
         if dislike_embedding is not None:
-            ids.append(f"{user_id}_dislike")
+            ids.append(f"user_{user_id}_dislike")
             embeddings.append(dislike_embedding)
-            metadatas.append({"user_id": user_id, "type": "dislike"})
-            documents.append(f"user_{user_id}_dislike")
+            metadatas.append({"user_id": user_id, "pref_type": "dislike"})
+            documents.append(f"User {user_id} negative preferences")
 
         if ids:
             col.upsert(ids=ids, embeddings=embeddings, metadatas=metadatas, documents=documents)
@@ -169,7 +169,7 @@ class VectorStore:
     def get_preference(self, user_id: str) -> dict:
         """获取用户的 like/dislike 向量。"""
         col = self.get_collection(self.COLLECTION_USER_PREF)
-        result = col.get(ids=[f"{user_id}_like", f"{user_id}_dislike"])
+        result = col.get(ids=[f"user_{user_id}_like", f"user_{user_id}_dislike"])
         pref = {"like_embedding": None, "dislike_embedding": None}
         for i, _id in enumerate(result.get("ids", [])):
             if _id.endswith("_like"):

@@ -11,6 +11,7 @@ import threading
 from datetime import datetime, timezone, timedelta
 from models.database import Database
 from utils.pipeline_runner import run_agent_pipeline
+from agents.feedback_agent import process_feedback_async
 
 
 def _run_pipeline_with_tee(trigger: str = "manual"):
@@ -64,12 +65,12 @@ def _load_briefs(limit: int = 10) -> list:
 
 
 def _load_brief_items(brief_id: int) -> list:
-    """加载简报关联的条目。"""
+    """加载简报关联的条目（含 item_id 用于反馈）。"""
     db = _get_db()
     with db.get_connection() as conn:
         cursor = conn.execute(
             """
-            SELECT bi.rank, bi.final_score, bi.is_highlight,
+            SELECT bi.item_id, bi.rank, bi.final_score, bi.is_highlight,
                    ri.title, ri.summary, ri.url, ri.source_id
             FROM briefing_items bi
             JOIN deduped_items di ON bi.item_id = di.id
@@ -80,6 +81,34 @@ def _load_brief_items(brief_id: int) -> list:
             (brief_id,),
         )
         return [dict(row) for row in cursor.fetchall()]
+
+
+def _check_item_feedback(item_id: int) -> str:
+    """检查某条目是否已有用户反馈。"""
+    db = _get_db()
+    with db.get_connection() as conn:
+        cursor = conn.execute(
+            "SELECT feedback_type FROM feedback WHERE item_id = ? AND user_id = 1 ORDER BY created_at DESC LIMIT 1",
+            (item_id,),
+        )
+        row = cursor.fetchone()
+        return row["feedback_type"] if row else None
+
+
+def _add_feedback_with_agent(item_id: int, feedback_type: str, brief_id: int = None):
+    """添加反馈并异步触发 feedback_agent 完整 pipeline。
+
+    feedback_agent 内部会完成：
+    1. record_feedback → 写入 SQLite feedback 表
+    2. update_preference → EMA 更新偏好向量
+    3. vector_add → 写入 ChromaDB COLLECTION_USER_PREF
+    4. cleanup_preference → 清理低权重偏好
+    """
+    try:
+        process_feedback_async(user_id=1, item_id=item_id, feedback_type=feedback_type, brief_id=brief_id)
+        print(f"[home_page] 反馈已提交，feedback_agent 异步处理中: item={item_id}, type={feedback_type}", flush=True)
+    except Exception as e:
+        print(f"[home_page] feedback_agent 启动失败: {e}", flush=True)
 
 
 def _delete_brief(brief_id: int):
@@ -160,24 +189,50 @@ def render():
                 with st.expander("📄 查看简报内容", expanded=False):
                     st.markdown(brief["content_md"])
 
-            # 显示关联条目
+            # 显示关联条目（含反馈按钮）
             items = _load_brief_items(brief_id)
             if items:
                 with st.expander(f"📋 关联条目 ({len(items)} 条)", expanded=False):
                     for item in items:
+                        item_id = item["item_id"]
                         title = item["title"] or "无标题"
                         score = item["final_score"] or 0
                         highlight = "⭐ " if item["is_highlight"] else ""
 
-                        st.markdown(
-                            f"""
-                            **{highlight}{item['rank']}. {title}**
-                            - 评分: {score:.3f}
-                            - [查看原文]({item['url'] or '#'})
-                            """
-                        )
-                        if item["summary"]:
-                            st.caption(item["summary"][:200] + "...")
+                        # 条目信息行
+                        info_col, fb_col = st.columns([4, 1])
+                        with info_col:
+                            st.markdown(
+                                f"""
+                                **{highlight}{item['rank']}. {title}**
+                                - 评分: {score:.3f}
+                                - [查看原文]({item['url'] or '#'})
+                                """
+                            )
+                            if item["summary"]:
+                                st.caption(item["summary"][:200] + "...")
+
+                        # 反馈按钮列
+                        with fb_col:
+                            existing_fb = _check_item_feedback(item_id)
+                            if existing_fb:
+                                # 已有反馈，显示当前状态
+                                fb_label = {"like": "👍 已喜欢", "dislike": "👎 已不喜欢", "irrelevant": "🚫 已标不相关"}
+                                st.caption(fb_label.get(existing_fb, existing_fb))
+                            else:
+                                # 无反馈，显示反馈按钮
+                                fb_key = f"fb_{brief_id}_{item_id}"
+                                fb_type = st.selectbox(
+                                    "反馈",
+                                    ["", "👍 喜欢", "👎 不喜欢", "🚫 不相关"],
+                                    key=f"fb_select_{fb_key}",
+                                    label_visibility="collapsed",
+                                )
+                                if fb_type:
+                                    fb_map = {"👍 喜欢": "like", "👎 不喜欢": "dislike", "🚫 不相关": "irrelevant"}
+                                    _add_feedback_with_agent(item_id, fb_map[fb_type], brief_id)
+                                    st.toast(f"✅ 反馈已记录：{fb_type}")
+                                    st.rerun()
 
             st.markdown("---")
 

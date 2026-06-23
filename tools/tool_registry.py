@@ -240,7 +240,7 @@ def _execute_record_feedback(arguments: dict) -> dict:
     agent = build_feedback_agent()
     temp_state = {
         "user_id": user_id,
-        "feedback_item_id": item_id,
+        "item_id": item_id,
         "feedback_type": feedback_type,
     }
     try:

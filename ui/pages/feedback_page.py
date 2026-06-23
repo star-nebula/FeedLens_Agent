@@ -4,6 +4,7 @@
 
 import streamlit as st
 from models.database import Database
+from agents.feedback_agent import process_feedback_async
 
 
 def _get_db() -> Database:
@@ -48,16 +49,18 @@ def _load_recent_items(limit: int = 20) -> list:
 
 
 def _add_feedback(item_id: int, feedback_type: str, brief_id: int = None):
-    """添加反馈。"""
-    db = _get_db()
-    with db.get_connection() as conn:
-        conn.execute(
-            """
-            INSERT INTO feedback (user_id, item_id, feedback_type, brief_id)
-            VALUES (1, ?, ?, ?)
-            """,
-            (item_id, feedback_type, brief_id),
-        )
+    """添加反馈并触发 feedback_agent 完整 pipeline。
+
+    feedback_agent 内部会完成：
+    1. record_feedback → 写入 SQLite feedback 表
+    2. update_preference → EMA 更新偏好向量
+    3. vector_add → 写入 ChromaDB COLLECTION_USER_PREF
+    4. cleanup_preference → 清理低权重偏好
+    """
+    try:
+        process_feedback_async(user_id=1, item_id=item_id, feedback_type=feedback_type, brief_id=brief_id)
+    except Exception as e:
+        print(f"[feedback_page] feedback_agent 启动失败: {e}", flush=True)
 
 
 def _get_feedback_stats() -> dict:
