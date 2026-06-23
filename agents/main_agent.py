@@ -468,17 +468,20 @@ def _build_router_context(state: FeedLensState) -> dict:
     }
 
 
-def _fallback_router_decision(state: FeedLensState) -> str:
-    """LLM 返回空内容时的规则路由降级（不依赖 LLM 的确定性路由）。
+def _rule_based_router_decision(state: FeedLensState) -> dict | None:
+    """规则路由决策（不依赖 LLM 的确定性路由）。
+
+    正常流程中所有路由场景均可用规则判断，无需 LLM。
+    返回 None 表示规则无法覆盖，需调用 LLM。
 
     按优先级判断下一步：
     1. plan 非空且未执行 → invoke_sub_agent
     2. plan 已执行但未观察 → observe_results
-    3. 已观察、需重试且未达上限 → planner
+    3. 已观察、需重试且未达上限 → planner（需要 LLM 重新编排 plan）
     4. 已观察、不需重试 → coordinator_reflect
     5. coordinator 审查通过 → push_notification
     6. push 完成 → update_memory
-    7. 其他 → update_memory
+    7. 兜底 → update_memory
     """
     plan = state.get("sub_agent_plan", [])
     executed = state.get("sub_agent_executed", False)
@@ -487,32 +490,48 @@ def _fallback_router_decision(state: FeedLensState) -> str:
     push_status = state.get("push_status", "")
     react_cycle = state.get("react_cycle_count", 0)
 
-    # 1. 有未执行的计划
+    # 1. 有未执行的计划 → 直接执行
     if plan and not executed:
-        return '{"next_node": "invoke_sub_agent", "reason": "规则降级：执行计划中的子Agent"}'
+        return {"next_node": "invoke_sub_agent", "reason": "规则路由：执行计划中的子Agent"}
 
-    # 2. 已执行但未观察
+    # 2. 已执行但未观察 → 评估结果
     if executed and not obs:
-        return '{"next_node": "observe_results", "reason": "规则降级：子Agent执行完毕，评估结果"}'
+        return {"next_node": "observe_results", "reason": "规则路由：子Agent执行完毕，评估结果"}
 
-    # 3. 已观察，需要重试且未达上限
+    # 3. 已观察，需要重试且未达上限 → 需要 LLM 重新编排 plan
     if obs.get("needs_retry") and react_cycle < 3:
-        return '{"next_node": "planner", "reason": "规则降级：需要重新编排"}'
+        return None  # 规则无法覆盖：需要 LLM planner 重新编排 sub_agent_plan
+
+    # 3b. 已观察，需要重试但已达上限 → 根据数据量决定 abort 还是收敛
+    if obs.get("needs_retry") and react_cycle >= 3:
+        collected_count = len(state.get("collected_items", []))
+        if collected_count == 0:
+            return {"next_node": "abort", "reason": "规则路由：多次重试采集仍为0，放弃执行"}
+        # 有数据但质量不达标 → 强制收敛到 update_memory
+        return {"next_node": "update_memory", "reason": "规则路由：已达重试上限，强制收敛结束"}
 
     # 4. 已观察，无需重试 → 综合审查
     if obs and not obs.get("needs_retry", False):
-        return '{"next_node": "coordinator_reflect", "reason": "规则降级：进入综合审查"}'
+        return {"next_node": "coordinator_reflect", "reason": "规则路由：进入综合审查"}
 
     # 5. 综合审查通过 → 推送
     if coordinator_obs.get("overall_pass") and not push_status:
-        return '{"next_node": "push_notification", "reason": "规则降级：审查通过，推送简报"}'
+        return {"next_node": "push_notification", "reason": "规则路由：审查通过，推送简报"}
 
-    # 6. 推送完成 → 记忆写入
+    # 6. 综合审查不通过且未达上限 → 需要 LLM 重新编排
+    if coordinator_obs and not coordinator_obs.get("overall_pass", True) and react_cycle < 3:
+        return None  # 规则无法覆盖：需要 LLM planner 重新编排 sub_agent_plan
+
+    # 6b. 综合审查不通过且已达上限 → 强制收敛推送
+    if coordinator_obs and not coordinator_obs.get("overall_pass", True) and react_cycle >= 3:
+        return {"next_node": "push_notification", "reason": "规则路由：审查未通过但已达上限，强制推送"}
+
+    # 7. 推送完成 → 记忆写入
     if push_status == "sent":
-        return '{"next_node": "update_memory", "reason": "规则降级：推送完成，写入记忆"}'
+        return {"next_node": "update_memory", "reason": "规则路由：推送完成，写入记忆"}
 
-    # 7. 兜底：写入记忆结束
-    return '{"next_node": "update_memory", "reason": "规则降级：兜底结束流程"}'
+    # 8. 兜底：写入记忆结束
+    return {"next_node": "update_memory", "reason": "规则路由：兜底结束流程"}
 
 
 def router_node(state: FeedLensState) -> dict:
@@ -577,32 +596,17 @@ def router_node(state: FeedLensState) -> dict:
             "agentic_turn_count": state.get("agentic_turn_count", 0) + 1,
         }
 
-    # 构建状态摘要
-    context = _build_router_context(state)
-
-    try:
-        llm = _get_llm_provider()
-        messages = [
-            {"role": "system", "content": ROUTER_SYSTEM_PROMPT},
-            {"role": "user", "content": json.dumps(context, ensure_ascii=False)},
-        ]
-        response = llm.chat(messages, temperature=0.1, max_tokens=512)
-        # 兼容 LLMRouter 不同 provider 的返回格式差异
-        if isinstance(response, str):
-            text = response
-        elif isinstance(response, dict):
-            text = response.get("content") or "{}"
-        else:
-            text = "{}"
-        # 空响应处理：某些模型（如 deepseek-v4-flash）可能返回空字符串
-        if not text or not text.strip():
-            print(f"[router] LLM 返回空内容，降级到规则路由", flush=True)
-            text = _fallback_router_decision(state)
-        decision = _parse_router_response(text)
-        print(f"[router] LLM 决策: {json.dumps(decision, ensure_ascii=False)}", flush=True)
-    except Exception as e:
-        print(f"[router] LLM 调用失败，降级到 planner: {e}", flush=True)
-        decision = {"next_node": "planner", "reason": f"LLM 调用失败: {e}"}
+    # P0-2.4: 规则优先路由 — 正常流程场景全部由规则覆盖，无需 LLM
+    # 只有 needs_retry 或 overall_pass=false 需要 planner 重新编排时，才调 LLM
+    rule_decision = _rule_based_router_decision(state)
+    if rule_decision is not None:
+        decision = rule_decision
+        print(f"[router] 规则路由: {json.dumps(decision, ensure_ascii=False)}", flush=True)
+    else:
+        # 规则无法覆盖的场景（needs_retry / overall_pass=false）：需要 LLM planner 重新编排
+        # 此时直接路由到 planner，让 planner_node 用 LLM 重新生成 sub_agent_plan
+        print(f"[router] 规则无法覆盖（需重新编排），路由到 planner", flush=True)
+        decision = {"next_node": "planner", "reason": "规则无法覆盖：需要LLM重新编排sub_agent_plan"}
 
     return {
         "router_decision": decision,

@@ -1,12 +1,12 @@
 """
-Router 路由测试脚本 — Phase 4a + 4b 验证。
+Router 路由测试脚本 — Phase 4a + 4b 验证 + P0-2.4 规则优先路由。
 
 测试内容：
   - _parse_router_response 三层 JSON 容错
-  - _build_router_context 上下文构建
+  - _rule_based_router_decision 规则路由覆盖
   - router_node 防死循环 + 硬兜底
+  - router_node 规则优先路由（无需 mock LLM）
   - _router_decide 条件边函数
-  - 全部路由场景（LLM mock 模拟）
 """
 
 import sys
@@ -14,7 +14,6 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import json
-import unittest.mock
 import agents.main_agent as ma
 
 
@@ -101,37 +100,148 @@ def test_parse_nested_json():
 
 
 # ============================================================
-# _build_router_context 测试
+# _rule_based_router_decision 测试（P0-2.4 规则优先路由）
 # ============================================================
 
 
-def test_build_router_context():
-    """上下文构建包含必要字段。"""
-    print("\n[test] router - 构建路由上下文")
+def test_rule_plan_not_executed():
+    """plan 非空且未执行 → invoke_sub_agent。"""
+    print("\n[test] router - 规则：plan未执行→invoke_sub_agent")
     state = _mock_state({
-        "collected_items": [{"id": "1"}],
-        "ranked_items": [{"id": "1"}],
-        "brief_quality": 0.8,
-        "sub_agent_plan": [{"agent": "Collection"}],
+        "sub_agent_plan": [{"agent": "Collection", "params": {}}],
+        "sub_agent_executed": False,
     })
-    ctx = ma._build_router_context(state)
+    result = ma._rule_based_router_decision(state)
+    assert result is not None
+    assert result["next_node"] == "invoke_sub_agent"
+    print(f"  [PASS] 规则路由: {result['next_node']}")
 
-    assert "sub_agent_plan" in ctx
-    assert "collected_count" in ctx
-    assert "ranked_count" in ctx
-    assert "react_cycle_count" in ctx
-    assert "agentic_turn_count" in ctx
-    assert "observation" in ctx
-    assert "coordinator_observation" in ctx
-    assert "push_status" in ctx
-    assert "status" in ctx
-    assert "brief_quality" in ctx
 
-    assert ctx["collected_count"] == 1
-    assert ctx["ranked_count"] == 1
-    assert ctx["brief_quality"] == 0.8
-    assert ctx["sub_agent_plan_count"] == 1
-    print(f"  [PASS] 上下文: collected={ctx['collected_count']}, ranked={ctx['ranked_count']}, quality={ctx['brief_quality']}")
+def test_rule_executed_no_observe():
+    """已执行但未观察 → observe_results。"""
+    print("\n[test] router - 规则：已执行未观察→observe_results")
+    state = _mock_state({
+        "sub_agent_executed": True,
+        "observation_result": {},
+    })
+    result = ma._rule_based_router_decision(state)
+    assert result is not None
+    assert result["next_node"] == "observe_results"
+    print(f"  [PASS] 规则路由: {result['next_node']}")
+
+
+def test_rule_needs_retry_under_limit():
+    """needs_retry 且未达上限 → None（需 LLM planner）。"""
+    print("\n[test] router - 规则：needs_retry未达上限→None(需LLM)")
+    state = _mock_state({
+        "observation_result": {"needs_retry": True, "issues": ["采集不足"]},
+        "react_cycle_count": 1,
+    })
+    result = ma._rule_based_router_decision(state)
+    assert result is None
+    print(f"  [PASS] 规则无法覆盖: result=None")
+
+
+def test_rule_needs_retry_at_limit_abort():
+    """needs_retry 已达上限且采集为0 → abort。"""
+    print("\n[test] router - 规则：needs_retry达上限+采集0→abort")
+    state = _mock_state({
+        "observation_result": {"needs_retry": True, "issues": ["采集不足"], "collection_ok": False},
+        "react_cycle_count": 3,
+        "collected_items": [],
+    })
+    result = ma._rule_based_router_decision(state)
+    assert result is not None
+    assert result["next_node"] == "abort"
+    print(f"  [PASS] 规则路由: {result['next_node']}")
+
+
+def test_rule_needs_retry_at_limit_converge():
+    """needs_retry 已达上限但有数据 → update_memory 收敛。"""
+    print("\n[test] router - 规则：needs_retry达上限+有数据→收敛")
+    state = _mock_state({
+        "observation_result": {"needs_retry": True, "issues": ["简报质量低"]},
+        "react_cycle_count": 3,
+        "collected_items": [{"id": "1"}],
+    })
+    result = ma._rule_based_router_decision(state)
+    assert result is not None
+    assert result["next_node"] == "update_memory"
+    print(f"  [PASS] 规则路由: {result['next_node']}")
+
+
+def test_rule_no_retry_coordinator():
+    """needs_retry=false → coordinator_reflect。"""
+    print("\n[test] router - 规则：无需重试→coordinator_reflect")
+    state = _mock_state({
+        "observation_result": {"needs_retry": False, "issues": []},
+    })
+    result = ma._rule_based_router_decision(state)
+    assert result is not None
+    assert result["next_node"] == "coordinator_reflect"
+    print(f"  [PASS] 规则路由: {result['next_node']}")
+
+
+def test_rule_coordinator_pass_push():
+    """审查通过 → push_notification。"""
+    print("\n[test] router - 规则：审查通过→push_notification")
+    state = _mock_state({
+        "coordinator_observation": {"overall_pass": True, "issues": []},
+        "push_status": "",
+    })
+    result = ma._rule_based_router_decision(state)
+    assert result is not None
+    assert result["next_node"] == "push_notification"
+    print(f"  [PASS] 规则路由: {result['next_node']}")
+
+
+def test_rule_coordinator_fail_under_limit():
+    """审查不通过未达上限 → None（需 LLM planner）。"""
+    print("\n[test] router - 规则：审查不通过未达上限→None(需LLM)")
+    state = _mock_state({
+        "coordinator_observation": {"overall_pass": False, "issues": ["简报质量低"]},
+        "react_cycle_count": 1,
+    })
+    result = ma._rule_based_router_decision(state)
+    assert result is None
+    print(f"  [PASS] 规则无法覆盖: result=None")
+
+
+def test_rule_coordinator_fail_at_limit():
+    """审查不通过已达上限 → 强制推送。"""
+    print("\n[test] router - 规则：审查不通过达上限→强制推送")
+    state = _mock_state({
+        "coordinator_observation": {"overall_pass": False, "issues": ["简报质量低"]},
+        "react_cycle_count": 3,
+    })
+    result = ma._rule_based_router_decision(state)
+    assert result is not None
+    assert result["next_node"] == "push_notification"
+    print(f"  [PASS] 规则路由: {result['next_node']}")
+
+
+def test_rule_push_sent_update_memory():
+    """推送完成 → update_memory。"""
+    print("\n[test] router - 规则：推送完成→update_memory")
+    state = _mock_state({
+        "push_status": "sent",
+    })
+    result = ma._rule_based_router_decision(state)
+    assert result is not None
+    assert result["next_node"] == "update_memory"
+    print(f"  [PASS] 规则路由: {result['next_node']}")
+
+
+def test_rule_fallback_update_memory():
+    """无匹配规则 → 兜底 update_memory。"""
+    print("\n[test] router - 规则：兜底→update_memory")
+    state = _mock_state({
+        "status": "running",
+    })
+    result = ma._rule_based_router_decision(state)
+    assert result is not None
+    assert result["next_node"] == "update_memory"
+    print(f"  [PASS] 规则路由: {result['next_node']}")
 
 
 # ============================================================
@@ -166,110 +276,69 @@ def test_router_max_turns():
 
 
 # ============================================================
-# router_node LLM 决策测试（mock LLM）
+# router_node 规则优先路由测试（P0-2.4：无需 mock LLM）
 # ============================================================
 
 
-def test_router_llm_decision_planner():
-    """LLM 决策 → planner（需要重新编排）。"""
-    print("\n[test] router - LLM 决策 planner")
-    state = _mock_state({
-        "collected_items": [],
-        "observation_result": {"needs_retry": True, "issues": ["采集不足"]},
-    })
-    mock_llm = unittest.mock.MagicMock()
-    mock_llm.chat.return_value = '{"next_node": "planner", "reason": "采集为空，需要重新编排"}'
-
-    with unittest.mock.patch.object(ma, "_get_llm_provider", return_value=mock_llm):
-        result = ma.router_node(state)
-
-    assert result["router_decision"]["next_node"] == "planner"
-    assert result["agentic_turn_count"] == 1
-    assert len(result["router_history"]) == 1
-    print(f"  [PASS] LLM→planner: turn={result['agentic_turn_count']}")
-
-
-def test_router_llm_decision_invoke():
-    """LLM 决策 → invoke_sub_agent。"""
-    print("\n[test] router - LLM 决策 invoke_sub_agent")
+def test_router_rule_plan_not_executed():
+    """规则优先：plan 非空 → invoke_sub_agent（不调 LLM）。"""
+    print("\n[test] router - 规则优先：plan→invoke_sub_agent")
     state = _mock_state({
         "sub_agent_plan": [{"agent": "Collection", "params": {}}],
     })
-    mock_llm = unittest.mock.MagicMock()
-    mock_llm.chat.return_value = '{"next_node": "invoke_sub_agent", "reason": "执行采集任务"}'
-
-    with unittest.mock.patch.object(ma, "_get_llm_provider", return_value=mock_llm):
-        result = ma.router_node(state)
-
+    result = ma.router_node(state)
     assert result["router_decision"]["next_node"] == "invoke_sub_agent"
-    print(f"  [PASS] LLM→invoke_sub_agent")
+    assert "规则路由" in result["router_decision"]["reason"]
+    print(f"  [PASS] 规则优先→invoke_sub_agent（无LLM调用）")
 
 
-def test_router_llm_decision_push():
-    """LLM 决策 → push_notification（简报质量达标）。"""
-    print("\n[test] router - LLM 决策 push_notification")
+def test_router_rule_needs_retry_to_planner():
+    """规则优先：needs_retry 未达上限 → planner（planner 内会调 LLM）。"""
+    print("\n[test] router - 规则优先：needs_retry→planner")
     state = _mock_state({
-        "brief_quality": 0.85,
+        "observation_result": {"needs_retry": True, "issues": ["采集不足"]},
+        "react_cycle_count": 1,
+    })
+    result = ma.router_node(state)
+    assert result["router_decision"]["next_node"] == "planner"
+    assert "规则无法覆盖" in result["router_decision"]["reason"]
+    print(f"  [PASS] 规则优先→planner（planner内会调LLM重编排）")
+
+
+def test_router_rule_coordinator_pass_push():
+    """规则优先：审查通过 → push_notification。"""
+    print("\n[test] router - 规则优先：审查通过→push")
+    state = _mock_state({
         "coordinator_observation": {"overall_pass": True, "issues": []},
     })
-    mock_llm = unittest.mock.MagicMock()
-    mock_llm.chat.return_value = '{"next_node": "push_notification", "reason": "简报质量达标，可以推送"}'
-
-    with unittest.mock.patch.object(ma, "_get_llm_provider", return_value=mock_llm):
-        result = ma.router_node(state)
-
+    result = ma.router_node(state)
     assert result["router_decision"]["next_node"] == "push_notification"
-    print(f"  [PASS] LLM→push_notification")
+    assert "规则路由" in result["router_decision"]["reason"]
+    print(f"  [PASS] 规则优先→push_notification")
 
 
-def test_router_llm_decision_abort():
-    """LLM 决策 → abort（采集始终为0）。"""
-    print("\n[test] router - LLM 决策 abort")
+def test_router_rule_abort_on_limit():
+    """规则优先：needs_retry 达上限+采集为0 → abort。"""
+    print("\n[test] router - 规则优先：达上限+采集0→abort")
     state = _mock_state({
-        "collected_items": [],
+        "observation_result": {"needs_retry": True, "issues": ["采集不足"]},
         "react_cycle_count": 3,
-        "observation_result": {"needs_retry": True, "collection_ok": False, "issues": ["采集不足"]},
+        "collected_items": [],
     })
-    mock_llm = unittest.mock.MagicMock()
-    mock_llm.chat.return_value = '{"next_node": "abort", "reason": "多次重试采集仍为0，放弃执行"}'
-
-    with unittest.mock.patch.object(ma, "_get_llm_provider", return_value=mock_llm):
-        result = ma.router_node(state)
-
+    result = ma.router_node(state)
     assert result["router_decision"]["next_node"] == "abort"
-    print(f"  [PASS] LLM→abort")
+    print(f"  [PASS] 规则优先→abort")
 
 
-def test_router_llm_decision_update_memory():
-    """LLM 决策 → update_memory（推送完成）。"""
-    print("\n[test] router - LLM 决策 update_memory")
+def test_router_rule_push_sent_update_memory():
+    """规则优先：推送完成 → update_memory。"""
+    print("\n[test] router - 规则优先：推送完成→update_memory")
     state = _mock_state({
         "push_status": "sent",
-        "status": "running",
     })
-    mock_llm = unittest.mock.MagicMock()
-    mock_llm.chat.return_value = '{"next_node": "update_memory", "reason": "推送完成，记录日志"}'
-
-    with unittest.mock.patch.object(ma, "_get_llm_provider", return_value=mock_llm):
-        result = ma.router_node(state)
-
+    result = ma.router_node(state)
     assert result["router_decision"]["next_node"] == "update_memory"
-    print(f"  [PASS] LLM→update_memory")
-
-
-def test_router_llm_error_fallback():
-    """LLM 调用失败 → 降级到 planner。"""
-    print("\n[test] router - LLM 调用失败降级")
-    state = _mock_state()
-    mock_llm = unittest.mock.MagicMock()
-    mock_llm.chat.side_effect = RuntimeError("API 超时")
-
-    with unittest.mock.patch.object(ma, "_get_llm_provider", return_value=mock_llm):
-        result = ma.router_node(state)
-
-    assert result["router_decision"]["next_node"] == "planner"
-    assert "LLM 调用失败" in result["router_decision"]["reason"]
-    print(f"  [PASS] LLM 错误降级: {result['router_decision']['reason']}")
+    print(f"  [PASS] 规则优先→update_memory")
 
 
 # ============================================================
@@ -347,18 +416,27 @@ if __name__ == "__main__":
         ("JSON 解析-空字符串", test_parse_empty_string),
         ("JSON 解析-缺少next_node", test_parse_missing_next_node),
         ("JSON 解析-嵌套JSON", test_parse_nested_json),
-        # _build_router_context
-        ("构建上下文", test_build_router_context),
+        # _rule_based_router_decision（P0-2.4 规则优先路由）
+        ("规则-plan未执行→invoke", test_rule_plan_not_executed),
+        ("规则-已执行未观察→observe", test_rule_executed_no_observe),
+        ("规则-needs_retry未达上限→None", test_rule_needs_retry_under_limit),
+        ("规则-needs_retry达上限+空→abort", test_rule_needs_retry_at_limit_abort),
+        ("规则-needs_retry达上限+有数据→收敛", test_rule_needs_retry_at_limit_converge),
+        ("规则-无需重试→coordinator", test_rule_no_retry_coordinator),
+        ("规则-审查通过→push", test_rule_coordinator_pass_push),
+        ("规则-审查不通过未达上限→None", test_rule_coordinator_fail_under_limit),
+        ("规则-审查不通过达上限→强制推送", test_rule_coordinator_fail_at_limit),
+        ("规则-推送完成→update_memory", test_rule_push_sent_update_memory),
+        ("规则-兜底→update_memory", test_rule_fallback_update_memory),
         # router_node 安全机制
         ("死循环检测", test_router_loop_detection),
         ("超过最大轮数", test_router_max_turns),
-        # router_node LLM 决策
-        ("LLM→planner", test_router_llm_decision_planner),
-        ("LLM→invoke_sub_agent", test_router_llm_decision_invoke),
-        ("LLM→push_notification", test_router_llm_decision_push),
-        ("LLM→abort", test_router_llm_decision_abort),
-        ("LLM→update_memory", test_router_llm_decision_update_memory),
-        ("LLM 错误降级", test_router_llm_error_fallback),
+        # router_node 规则优先路由
+        ("router-规则优先→invoke_sub_agent", test_router_rule_plan_not_executed),
+        ("router-规则优先→planner", test_router_rule_needs_retry_to_planner),
+        ("router-规则优先→push_notification", test_router_rule_coordinator_pass_push),
+        ("router-规则优先→abort", test_router_rule_abort_on_limit),
+        ("router-规则优先→update_memory", test_router_rule_push_sent_update_memory),
         # _router_decide
         ("_router_decide 正常", test_router_decide_normal),
         ("_router_decide END", test_router_decide_end),

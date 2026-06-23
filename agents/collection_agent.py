@@ -239,9 +239,8 @@ def run_collection_agent(state: FeedLensState) -> dict:
             # LLM 没调工具直接回复，视为异常
             content = message.get("content", "")
             print(f"[collection_react] LLM 未调用工具，回复: {content[:100]}", flush=True)
-            # 如果 LLM 没有 tool_calls 但有内容，再给它一次机会
-            if content and turn < max_turns - 1:
-                # 安全处理：清除可能残留的 tool_calls 字段，防止下轮 API 400 错误
+            # tool_choice="required" 下极少出现，但保留一次重试作为兜底
+            if content and turn < 1:
                 safe_message = {k: v for k, v in message.items() if k != "tool_calls"}
                 messages.append(safe_message)
                 messages.append({"role": "user", "content": "请调用工具执行采集任务，完成后调用 finish_task。"})

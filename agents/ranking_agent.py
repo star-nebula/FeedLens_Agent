@@ -219,8 +219,8 @@ def rank_items_node(state: FeedLensState) -> dict:
     goal_embedding = state.get("goal_embedding", [])
     if not items:
         return {"ranked_items": [], "ranking_detail": {}}
-    print(f"[rank_items] 开始排序: {len(items)} 条", flush=True)
     expand_threshold = bool(state.get("expand_threshold", False))
+    print(f"[rank_items] 开始排序: {len(items)} 条, expand_threshold={expand_threshold}", flush=True)
     # P0-2.2: 预筛窗口配置化，默认 72h（3天），expand 模式 336h（14天）
     rank_cfg_prescreen = _load_ranking_config()
     prescreen_hours = rank_cfg_prescreen.get("prescreen_hours", 72)
@@ -487,6 +487,12 @@ def run_ranking_agent(state: FeedLensState) -> dict:
                         tool_args["feedback_history"] = vs_result.get("feedback_history", [])
                     if "goal_embedding" not in tool_args:
                         tool_args["goal_embedding"] = state.get("goal_embedding", [])
+                    # P0-2.2: 传递 expand_threshold（planner 通过 params 注入 state）
+                    if "expand_threshold" not in tool_args:
+                        et = current_state.get("expand_threshold", False)
+                        tool_args["expand_threshold"] = et
+                        if et:
+                            print(f"[ranking_react] expand_threshold=True 已注入 rank_items 工具调用", flush=True)
                     # 传递预加载的偏好向量，避免 rank_items_node 内部重复加载
                     if current_state.get("_pref_v_like") is not None:
                         tool_args["_pref_v_like"] = current_state["_pref_v_like"]
@@ -536,8 +542,8 @@ def run_ranking_agent(state: FeedLensState) -> dict:
         else:
             content = message.get("content", "")
             print(f"[ranking_react] LLM 未调用工具，回复: {content[:100]}", flush=True)
-            if content and turn < max_turns - 1:
-                # 安全处理：清除可能残留的 tool_calls 字段，防止下轮 API 400 错误
+            # tool_choice="required" 下极少出现，但保留一次重试作为兜底
+            if content and turn < 1:
                 safe_message = {k: v for k, v in message.items() if k != "tool_calls"}
                 messages.append(safe_message)
                 messages.append({"role": "user", "content": "请调用工具执行去重和排序，完成后调用 finish_task。"})

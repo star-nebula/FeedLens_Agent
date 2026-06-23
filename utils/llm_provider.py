@@ -75,16 +75,29 @@ class DeepSeekProvider(LLMProvider):
         tools: list[dict],
         temperature: float = 0.7,
         max_tokens: int = 4096,
+        tool_choice: str = "required",
         **kwargs,
     ) -> dict:
-        response = self.client.chat.completions.create(
-            model=self.model,
-            messages=messages,
-            tools=tools,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            **kwargs,
-        )
+        """发送对话消息并支持 Function Calling。
+
+        Args:
+            tool_choice: 工具选择策略，默认 "required" 强制调用工具。
+                         设为 "auto" 可恢复为模型自主决定。
+                         设为 None 时不传 tool_choice 参数（完全由模型决定）。
+        """
+        create_kwargs = {
+            "model": self.model,
+            "messages": messages,
+            "tools": tools,
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "extra_body": {"thinking": {"type": "disabled"}},
+        }
+        if tool_choice is not None:
+            create_kwargs["tool_choice"] = tool_choice
+
+        create_kwargs.update(kwargs)
+        response = self.client.chat.completions.create(**create_kwargs)
         return response.model_dump()
 
 
