@@ -158,7 +158,7 @@ def fetch_rss(
 def enrich_metadata(
     items: List[Dict[str, Any]],
     llm_provider: LLMProvider,
-    batch_size: int = 5,
+    batch_size: int = 20,
 ) -> List[Dict[str, Any]]:
     """
     使用 LLM 提取条目元数据（category/keywords/importance）。

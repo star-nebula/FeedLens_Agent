@@ -70,25 +70,52 @@ def _execute_search_web(arguments: dict) -> dict:
 
 
 def _execute_enrich_metadata(arguments: dict) -> dict:
-    """LLM 元数据增强。"""
+    """LLM 元数据增强（支持配置开关）。"""
     from tools.fc_tools import enrich_metadata as _fn
     from utils.llm_provider import DeepSeekProvider
     from utils.config import load_config
 
     items = arguments.get("items", [])
-    batch_size = arguments.get("batch_size", 5)
-
     if not items:
         return {"items": [], "count": 0}
 
     config = load_config()
+    enrich_cfg = config.get("enrich_metadata", {})
+    enabled = enrich_cfg.get("enabled", False)
+
+    if not enabled:
+        # 关闭增强：直接填充默认值，跳过 LLM 调用
+        print(f"[enrich_metadata] 已关闭（enabled=false），{len(items)} 条直接使用默认元数据", flush=True)
+        default_items = []
+        for item in items:
+            item_copy = dict(item)
+            item_copy["category"] = "其他"
+            item_copy["keywords"] = ""
+            item_copy["importance"] = 0.5
+            default_items.append(item_copy)
+        return {"items": default_items, "count": len(default_items)}
+
+    # 启用增强：使用配置中的 batch_size 和 max_items
+    batch_size = arguments.get("batch_size", enrich_cfg.get("batch_size", 20))
+    max_items = enrich_cfg.get("max_items", 30)
+    items_to_enrich = items[:max_items]
+    remainder = items[max_items:]
+
     llm_cfg = config.get("llm", {}).get("deepseek", {})
     llm = DeepSeekProvider(
         api_key=llm_cfg.get("api_key", ""),
         base_url=llm_cfg.get("base_url", "https://api.deepseek.com/v1"),
         model=llm_cfg.get("model", "deepseek-chat"),
     )
-    enriched = _fn(items, llm_provider=llm, batch_size=batch_size)
+    enriched = _fn(items_to_enrich, llm_provider=llm, batch_size=batch_size)
+
+    # 超限条目填充默认值
+    for item in remainder:
+        item["category"] = "其他"
+        item["keywords"] = ""
+        item["importance"] = 0.5
+        enriched.append(item)
+
     return {"items": enriched, "count": len(enriched)}
 
 
@@ -347,7 +374,7 @@ TOOLS = [
     },
     {
         "name": "enrich_metadata",
-        "description": "使用 LLM 对采集条目提取元数据：分类（category）、关键词（keywords）、重要性评分（importance 0-1）。",
+        "description": "使用 LLM 对采集条目提取元数据：分类（category）、关键词（keywords）、重要性评分（importance 0-1）。可通过 config 关闭以节省 API 调用。",
         "parameters": {
             "type": "object",
             "properties": {
@@ -357,7 +384,7 @@ TOOLS = [
                 },
                 "batch_size": {
                     "type": "integer",
-                    "description": "每批处理条数，默认 5",
+                    "description": "每批处理条数，默认 20",
                 },
             },
             "required": ["items"],

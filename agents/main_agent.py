@@ -531,6 +531,18 @@ def router_node(state: FeedLensState) -> dict:
     if len(recent) >= 3 and len(set(d.get("next_node", "") for d in recent)) == 1:
         same_node = recent[0].get("next_node", "unknown")
         print(f"[router] 死循环检测：连续 3 次路由到 {same_node}，强制结束", flush=True)
+        # 如果已经生成了简报但未经过 coordinator_reflect，先走 coordinator_reflect 确保 briefing 写入 state
+        has_briefing = bool(state.get("briefing") or state.get("briefing_result", {}).get("briefing"))
+        has_reflected = bool(state.get("coordinator_observation"))
+        if has_briefing and not has_reflected:
+            print(f"[router] 死循环检测：已有简报但未审查，先路由到 coordinator_reflect", flush=True)
+            return {
+                "router_decision": {"next_node": "coordinator_reflect", "reason": f"死循环检测：强制收敛，先审查再结束"},
+                "router_history": state.get("router_history", []) + [
+                    {"next_node": "coordinator_reflect", "reason": f"死循环检测：强制收敛"}
+                ],
+                "agentic_turn_count": state.get("agentic_turn_count", 0) + 1,
+            }
         return {
             "router_decision": {"next_node": "update_memory", "reason": f"死循环检测：连续3次{same_node}"},
             "router_history": state.get("router_history", []) + [
@@ -543,6 +555,18 @@ def router_node(state: FeedLensState) -> dict:
     max_turns = 8
     if state.get("agentic_turn_count", 0) >= max_turns:
         print(f"[router] 超过最大轮数 {max_turns}，强制结束", flush=True)
+        # 如果已经生成了简报但未经过 coordinator_reflect，先走 coordinator_reflect 确保 briefing 写入 state
+        has_briefing = bool(state.get("briefing") or state.get("briefing_result", {}).get("briefing"))
+        has_reflected = bool(state.get("coordinator_observation"))
+        if has_briefing and not has_reflected:
+            print(f"[router] 超轮数：已有简报但未审查，先路由到 coordinator_reflect", flush=True)
+            return {
+                "router_decision": {"next_node": "coordinator_reflect", "reason": f"超轮数{max_turns}，强制收敛审查"},
+                "router_history": state.get("router_history", []) + [
+                    {"next_node": "coordinator_reflect", "reason": f"超轮数{max_turns}，强制收敛"}
+                ],
+                "agentic_turn_count": state.get("agentic_turn_count", 0) + 1,
+            }
         return {
             "router_decision": {"next_node": "update_memory", "reason": f"超过最大轮数{max_turns}"},
             "router_history": state.get("router_history", []) + [
@@ -673,6 +697,9 @@ def invoke_sub_agent_node(state: FeedLensState) -> dict:
     if agent_status.get("Briefing") == "success":
         return_update["brief_quality"] = current_state.get("brief_quality", 0.0)
         return_update["quality_detail"] = current_state.get("quality_detail", {})
+        # 修复：必须显式写入 briefing 字段，防止 coordinator_reflect 被跳过时丢失
+        if current_state.get("briefing"):
+            return_update["briefing"] = current_state["briefing"]
 
     return return_update
 
@@ -932,8 +959,15 @@ def update_memory_node(state: FeedLensState) -> dict:
     except Exception as e:
         print(f"[update_memory] 执行日志写入失败: {e}", flush=True)
 
-    # 保存简报到 briefs 表
+    # 保存简报到 briefs 表 + briefing_items + deduped_items
+    # 优先从 state.briefing 取，回退到 state.briefing_result.briefing（兼容 coordinator_reflect 被跳过的情况）
     briefing_data = state.get("briefing", {})
+    if not briefing_data or not briefing_data.get("title"):
+        briefing_result = state.get("briefing_result", {})
+        briefing_data = briefing_result.get("briefing", {})
+        if briefing_data and briefing_data.get("title"):
+            print("[update_memory] briefing 字段为空，从 briefing_result 回退提取成功", flush=True)
+    ranked_items = state.get("ranked_items", [])
     if briefing_data and briefing_data.get("title"):
         try:
             db2 = Database(_get_db_path())
@@ -943,14 +977,62 @@ def update_memory_node(state: FeedLensState) -> dict:
             content_json = json.dumps(briefing_data, ensure_ascii=False)
             content_md = briefing_data.get("_markdown", "")
             with db2.get_connection() as conn:
-                conn.execute(
+                cursor = conn.execute(
                     """INSERT INTO briefs (user_id, content_json, content_md, quality_score)
                        VALUES (?, ?, ?, ?)""",
                     (user_id_local, content_json, content_md, quality_score),
                 )
-            print(f"[update_memory] 简报已保存到数据库", flush=True)
+                brief_id = cursor.lastrowid
+
+                # 写入 ranked_items → deduped_items + briefing_items
+                for rank, item in enumerate(ranked_items, start=1):
+                    item_id_str = item.get("id", "")
+                    title = item.get("title", "")
+                    summary = item.get("summary", "")
+                    url = item.get("url", "")
+                    source = item.get("source_name", item.get("source_url", item.get("source", "")))
+                    published_at = item.get("published_at", "")
+                    importance = item.get("importance", 0.5)
+                    category = item.get("category", "其他")
+                    final_score = item.get("_score", 0.0)
+                    is_highlight = 1 if item.get("is_highlight") else 0
+
+                    # 1) 写入 raw_items（如果还不存在）
+                    raw_id = None
+                    if url:
+                        existing = conn.execute(
+                            "SELECT id FROM raw_items WHERE url = ? LIMIT 1", (url,)
+                        ).fetchone()
+                        if existing:
+                            raw_id = existing["id"]
+                    if raw_id is None:
+                        raw_cursor = conn.execute(
+                            """INSERT INTO raw_items (title, summary, url, published_at)
+                               VALUES (?, ?, ?, ?)""",
+                            (title, summary, url, published_at or datetime.now().isoformat()),
+                        )
+                        raw_id = raw_cursor.lastrowid
+
+                    # 2) 写入 deduped_items
+                    dedup_cursor = conn.execute(
+                        """INSERT INTO deduped_items (representative_item_id, similar_count, category, importance)
+                           VALUES (?, ?, ?, ?)""",
+                        (raw_id, item.get("similar_count", 1), category, importance),
+                    )
+                    dedup_id = dedup_cursor.lastrowid
+
+                    # 3) 写入 briefing_items
+                    conn.execute(
+                        """INSERT INTO briefing_items (briefing_id, item_id, rank, final_score, is_highlight)
+                           VALUES (?, ?, ?, ?, ?)""",
+                        (brief_id, dedup_id, rank, final_score, is_highlight),
+                    )
+
+            print(f"[update_memory] 简报已保存: brief_id={brief_id}, items={len(ranked_items)}", flush=True)
         except Exception as e:
+            import traceback
             print(f"[update_memory] 简报保存失败: {e}", flush=True)
+            traceback.print_exc()
 
     # 更新 ChromaDB 偏好向量（取 top 3 条的正向偏好）
     if ranked_items:

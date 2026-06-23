@@ -75,6 +75,12 @@ breaking_news:
 memory:
   short_term_window: 15        # 短期记忆滑动窗口（轮数）
 
+# --- 元数据增强配置 ---
+enrich_metadata:
+  enabled: false               # 是否启用 LLM 元数据增强（P0 优化：默认关闭省 API）
+  batch_size: 20               # 批量处理大小（关闭时忽略）
+  max_items: 30                # 单次增强最多处理条目数（关闭时忽略）
+
 # --- 数据管理 ---
 data:
   retention_days: 30           # 过期数据清理天数
