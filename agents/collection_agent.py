@@ -257,11 +257,84 @@ def run_collection_agent(state: FeedLensState) -> dict:
 
 
 # ============================================================
+# Pipeline 采集函数 — 固定流水线，无 LLM 参与
+# ============================================================
+
+def run_collection_pipeline(state: FeedLensState) -> dict:
+    """固定流水线采集 — 无 LLM 参与，顺序执行 fetch_rss → normalize_items → 完成。
+
+    仅当 fetch_rss 返回 < collection_search_threshold 条时才调用 search_web 补充
+    （规则判断，不调 LLM）。
+
+    Args:
+        state: FeedLensState，包含 goal_text, structured_goal 等
+
+    Returns:
+        dict: {collected_items, search_supplemented, collection_summary}
+    """
+    config = load_config()
+    search_threshold = config.get("agents", {}).get("collection_search_threshold", 5)
+
+    sources = _get_rss_sources(state)
+    query = _get_search_query(state)
+
+    collected_items = []
+    search_supplemented = False
+
+    # Step 1: fetch_rss（直接调用工具，不经过 LLM）
+    print("[collection_pipeline] Step 1: fetch_rss", flush=True)
+    try:
+        rss_result = tool_registry.dispatch("fetch_rss", {"sources": sources})
+        rss_items = rss_result.get("items", [])
+        valid_items = [it for it in rss_items if "error" not in it]
+        collected_items.extend(valid_items)
+        print(f"[collection_pipeline] fetch_rss 完成: {len(collected_items)} 条有效", flush=True)
+    except Exception as e:
+        print(f"[collection_pipeline] fetch_rss 失败: {e}", flush=True)
+
+    # Step 2: search_web 补充（仅当 RSS 不足阈值时规则触发）
+    if len(collected_items) < search_threshold:
+        print(f"[collection_pipeline] Step 2: search_web 补充（当前仅 {len(collected_items)} 条，阈值={search_threshold}）", flush=True)
+        try:
+            search_result = tool_registry.dispatch("search_web", {"query": query})
+            search_items = search_result.get("items", [])
+            if search_items:
+                search_supplemented = True
+                collected_items.extend(search_items)
+                print(f"[collection_pipeline] search_web 完成: +{len(search_items)} 条", flush=True)
+        except Exception as e:
+            print(f"[collection_pipeline] search_web 失败: {e}", flush=True)
+
+    # Step 3: normalize_items（统一字段格式）
+    if collected_items:
+        print(f"[collection_pipeline] Step 3: normalize_items ({len(collected_items)} 条)", flush=True)
+        try:
+            norm_result = tool_registry.dispatch("normalize_items", {"items": collected_items})
+            normalized = norm_result.get("items", [])
+            if normalized:
+                collected_items = normalized
+        except Exception as e:
+            print(f"[collection_pipeline] normalize_items 失败: {e}，使用原始条目", flush=True)
+    else:
+        print("[collection_pipeline] 无条目，跳过 normalize_items", flush=True)
+
+    # Step 4: 完成
+    summary = f"采集完成：共 {len(collected_items)} 条（RSS + {'搜索补充' if search_supplemented else '仅 RSS'}）"
+    print(f"[collection_pipeline] {summary}", flush=True)
+
+    return {
+        "collected_items": collected_items,
+        "search_supplemented": search_supplemented,
+        "collection_summary": summary,
+    }
+
+
+# ============================================================
 # 兼容接口：保持 build_collection_agent().invoke(state) 签名
 # ============================================================
 
 class _ReActAgentWrapper:
-    """将 ReAct 函数包装为兼容 StateGraph .invoke() 的对象。"""
+    """将 ReAct / Pipeline 函数包装为兼容 StateGraph .invoke() 的对象。"""
 
     def __init__(self, fn):
         self._fn = fn
@@ -273,6 +346,18 @@ class _ReActAgentWrapper:
 def build_collection_agent():
     """构建采集 Agent（兼容旧接口）。
 
-    返回一个具有 .invoke(state) 方法的对象，内部执行 ReAct 循环。
+    根据 config 中 agents.collection_mode 选择模式：
+    - "pipeline": 固定流水线，无 LLM 参与（默认）
+    - "react": 传统 ReAct 循环（兼容模式）
+
+    返回一个具有 .invoke(state) 方法的对象。
     """
-    return _ReActAgentWrapper(run_collection_agent)
+    config = load_config()
+    mode = config.get("agents", {}).get("collection_mode", "pipeline")
+
+    if mode == "react":
+        print("[collection_agent] 模式: ReAct（LLM 自主决策）", flush=True)
+        return _ReActAgentWrapper(run_collection_agent)
+    else:
+        print("[collection_agent] 模式: Pipeline（固定流水线，省 API）", flush=True)
+        return _ReActAgentWrapper(run_collection_pipeline)

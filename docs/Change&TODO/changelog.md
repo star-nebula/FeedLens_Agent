@@ -322,3 +322,46 @@ deepseek-v4-flash 默认 Thinking Mode=enabled
 
 - 修复 `agents/ranking_agent.py`：ranking_react 循环中注入 `expand_threshold` 到 `rank_items` 工具调用
 - 新增测试 `scripts/test_expand_threshold.py`（4/4 通过）
+
+---
+
+### 2.8 Collection Agent 流程固定化 — Pipeline 替代 ReAct（2026-06-23）
+
+**改动文件**：`agents/collection_agent.py`, `config/config.yaml`
+
+**本质**：将 Collection Agent 从「LLM 自主决策 ReAct 循环」改为「固定流水线」，完全消除采集阶段的 LLM API 调用。Collection 的流程是确定性的（`fetch_rss → [search_web 补充] → normalize_items`），每一步都不依赖 LLM 判断，唯一需要决策的「RSS 不足时是否搜索」用简单规则替代（`if len < threshold: search_web()`）。
+
+**改动要点**：
+
+- **`agents/collection_agent.py` — 新增 `run_collection_pipeline()`**（第 263-329 行）
+  - 固定流水线：Step 1 `fetch_rss` → Step 2 `search_web`（仅 RSS < 阈值时）→ Step 3 `normalize_items` → Step 4 完成
+  - 0 次 LLM 调用，通过 `tool_registry.dispatch()` 直接调用工具函数
+  - 返回值签名与 `run_collection_agent()` 完全一致：`{collected_items, search_supplemented, collection_summary}`
+  - 异常防御：每一步都有 try/except 包裹，单个步骤失败不阻断流程
+
+- **`agents/collection_agent.py` — 修改 `build_collection_agent()`**（第 346-363 行）
+  - 根据 `config.agents.collection_mode` 选择模式：`"pipeline"`（默认）或 `"react"`（兼容）
+  - 旧版 config（无 `collection_mode` 字段）默认 pipeline
+
+- **`config/config.yaml` — 新增配置项**
+  - `agents.collection_mode: pipeline` — 采集模式切换
+  - `agents.collection_search_threshold: 5` — RSS 不足 N 条时自动触发 search_web
+
+**不改的部分**：
+- `run_collection_agent()` 保留（ReAct 模式回退）
+- `COLLECTION_SYSTEM_PROMPT` 保留（ReAct 模式需要）
+- `_ReActAgentWrapper` 不变（pipeline 函数也返回 dict，兼容 `.invoke()`）
+- `agents/main_agent.py` 不变（`invoke_sub_agent` 通过 `build_collection_agent().invoke(state)` 调用，签名兼容）
+- 其他 Agent（Ranking / Briefing / Router）不变
+
+**预估效果**：
+
+| 指标 | 优化前 (ReAct) | 优化后 (Pipeline) | 改善 |
+|------|---------------|-------------------|------|
+| 每轮采集 LLM API 调用 | 3-4 次 | 0 次 | **-100%** |
+| 采集总耗时 | ~12-15s | ~3-5s（仅 I/O） | **-60~70%** |
+
+**测试结果**：
+- `scripts/test_collection_pipeline.py`：10/10 通过（新增）
+- `scripts/test_collection_agent_react.py`：7/7 通过（回归，无变化）
+- `scripts/test_router.py`：29/29 通过（回归，无变化）

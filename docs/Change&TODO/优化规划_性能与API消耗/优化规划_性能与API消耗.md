@@ -186,20 +186,28 @@ enrich_metadata:
 
 ### 2.6 P2 — 预筛窗口可配置化
 
+> **状态：✅ 已在 2.2 优化中附带完成（2026-06-23）**
+>
+> 实施 P0-2.2「observe_results 判断逻辑优化」时，为解决"采集 62 条 → 预筛 7 天 → 仅剩 1 条"问题，顺带完成了本项的两个方案：
+> - **方案 A（配置化）**：`config.yaml` 新增 `ranking.prescreen_hours: 72`，`rank_items_node()` 从 config 读取（`agents/ranking_agent.py:226`）
+> - **方案 B（动态调整）**：observe 判定 `prescreen_too_strict` 时注入 `expand_threshold=True`，rank_items 自动放宽到 336h/14 天（`agents/ranking_agent.py:227`）
+>
+> 无需额外实施。
+
 **问题描述**：当前 `rank_items` 的预筛窗口硬编码为 7 天（168 小时），第 0 轮 62 条 → 1 条就是因为多数条目超过 7 天被丢弃。
 
 **涉及文件**：
-- `tools/fc_tools.py` — `rank_items()` 中的预筛逻辑
+- ~~`tools/fc_tools.py`~~ → 实际改动在 `agents/ranking_agent.py` 的 `rank_items_node()`（预筛逻辑所在位置）
 - `config/config.yaml` — `ranking` 配置段
 
 **优化方案**：
 
-| 方案 | 改动内容 | 预期效果 |
-|------|---------|---------|
-| **A. 配置化预筛窗口** | `config.yaml` 新增 `ranking.prescreen_hours: 72`，rank_items 从 config 读取 | 首轮排序保留更多条目 |
-| **B. 动态调整窗口** | observe 发现排序不足时，planner 传递 `expand_threshold` 参数，rank_items 动态放宽窗口 | 第 N 轮自动扩容，无需重采集 |
+| 方案 | 改动内容 | 预期效果 | 状态 |
+|------|---------|---------|------|
+| **A. 配置化预筛窗口** | `config.yaml` 新增 `ranking.prescreen_hours: 72`，rank_items 从 config 读取 | 首轮排序保留更多条目 | ✅ 已完成 |
+| **B. 动态调整窗口** | observe 发现排序不足时，planner 传递 `expand_threshold` 参数，rank_items 动态放宽窗口 | 第 N 轮自动扩容，无需重采集 | ✅ 已完成 |
 
-**推荐**：**A 方案**（简单有效）。
+**推荐**：**A + B 组合**（均已完成）。
 
 **配置变更**（`config/config.yaml`）：
 ```yaml
@@ -207,9 +215,10 @@ ranking:
   prescreen_hours: 72          # 新增：预筛时间窗口（小时），默认 72=3天
 ```
 
-**代码变更**：
-- `tools/fc_tools.py` — `rank_items()` 中 `prescreen_hours` 参数从 config 读取而非硬编码 168
-- `config/config.yaml` — 新增配置项
+**代码变更**（已在 2.2 中完成）：
+- `agents/ranking_agent.py:226` — `rank_items_node()` 中 `prescreen_hours` 从 config 读取，默认 72h
+- `agents/ranking_agent.py:227` — `expand_threshold` 模式自动放宽到 336h（14 天）
+- `config/config.yaml:48` — 新增 `prescreen_hours: 72`
 
 ---
 
@@ -221,7 +230,7 @@ ranking:
 |------|------|---------|--------|-----------|
 | 1 | enrich_metadata 默认关闭 + batch_size=20 | `tools/fc_tools.py`, `config/config.yaml`, `agents/collection_agent.py` | P0 | 0.5h |
 | 2 | observe 区分"采集不足"与"预筛过严" | `agents/main_agent.py:1077-1122` | P0 | 1h |
-| 3 | 预筛窗口配置化 (prescreen_hours) | `tools/fc_tools.py`, `config/config.yaml` | P2→提前 | 0.5h |
+| 3 | 预筛窗口配置化 (prescreen_hours) | `agents/ranking_agent.py`, `config/config.yaml` | P2→提前 ✅ 已随2.2完成 | 0.5h |
 | 4 | max_turns 收紧 (8→5) | `agents/main_agent.py:555` | P0 | 0.25h |
 
 ### 第二阶段（预计再节省 ~20% API + ~20% 耗时）
