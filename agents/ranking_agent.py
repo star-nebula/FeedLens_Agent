@@ -221,7 +221,10 @@ def rank_items_node(state: FeedLensState) -> dict:
         return {"ranked_items": [], "ranking_detail": {}}
     print(f"[rank_items] 开始排序: {len(items)} 条", flush=True)
     expand_threshold = bool(state.get("expand_threshold", False))
-    prefilter_hours = 336 if expand_threshold else 168
+    # P0-2.2: 预筛窗口配置化，默认 72h（3天），expand 模式 336h（14天）
+    rank_cfg_prescreen = _load_ranking_config()
+    prescreen_hours = rank_cfg_prescreen.get("prescreen_hours", 72)
+    prefilter_hours = 336 if expand_threshold else prescreen_hours
     now = datetime.now()
     filtered_items = []
     for item in items:
@@ -236,7 +239,7 @@ def rank_items_node(state: FeedLensState) -> dict:
                 pass
         filtered_items.append(item)
     pre_drop = len(items) - len(filtered_items)
-    pre_label = "14 天" if expand_threshold else "7 天"
+    pre_label = f"14 天" if expand_threshold else f"{prescreen_hours // 24} 天"
     print(f"[rank_items] 预筛({pre_label}): {len(items)} -> {len(filtered_items)} 条 (丢弃: {pre_drop} 条)", flush=True)
     if not filtered_items:
         return {"ranked_items": [], "ranking_detail": {"total_items": 0, "prescreened_dropped": pre_drop}}

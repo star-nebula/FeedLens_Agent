@@ -551,8 +551,9 @@ def router_node(state: FeedLensState) -> dict:
             "agentic_turn_count": state.get("agentic_turn_count", 0) + 1,
         }
 
-    # 硬兜底：超过 max_turns
-    max_turns = 8
+    # 硬兜底：超过 max_turns（P0-2.2: 配置化，默认 5）
+    cfg = load_config()
+    max_turns = cfg.get("agents", {}).get("max_turns", 5)
     if state.get("agentic_turn_count", 0) >= max_turns:
         print(f"[router] 超过最大轮数 {max_turns}，强制结束", flush=True)
         # 如果已经生成了简报但未经过 coordinator_reflect，先走 coordinator_reflect 确保 briefing 写入 state
@@ -1071,6 +1072,10 @@ def _default_observe_evaluate(ctx: dict) -> dict:
     注册为 observe.evaluate hook。ctx 含 collected/ranked/top_score/
     brief_quality/阈值配置，返回 collection_ok/ranking_ok/.../needs_retry/
     issues/suggested_action。
+
+    P0-2.2 优化：新增 prescreen_too_strict 判断，区分"预筛过严导致条目少"
+    与"排序算法真正失败"。当采集充足但排序后条目极少时，标记为预筛过严，
+    避免 needs_retry=True 触发完整三板斧重跑。
     """
     collected = ctx.get("collected", [])
     ranked = ctx.get("ranked", [])
@@ -1083,7 +1088,21 @@ def _default_observe_evaluate(ctx: dict) -> dict:
     expected = ctx.get("expected_brief_items", 10)
 
     collection_ok = len(collected) >= th_coll
-    ranking_ok = bool(ranked and top_score >= th_rank)
+
+    # P0-2.2: 预筛过严检测 — 采集充足但排序后条目极少（如 62→1）
+    # 此时 top_score 自然低（条目少），不应归咎于排序算法
+    prescreen_too_strict = (
+        collection_ok
+        and len(collected) >= expected
+        and len(ranked) < max(th_coll, expected // 2)
+    )
+    if prescreen_too_strict:
+        ranking_ok = True  # 不归咎排序，避免 needs_retry 触发完整重跑
+        print(f"[observe] 检测到预筛过严: collected={len(collected)} -> ranked={len(ranked)}，"
+              f"建议 expand_threshold 而非重跑排序", flush=True)
+    else:
+        ranking_ok = bool(ranked and top_score >= th_rank)
+
     # 简报质量评估：需同时检查 brief_quality > 0（是否真正生成）和评分达标
     briefing_ok = brief_quality > 0 and brief_quality >= th_brief
     briefing_count_ok = len(ranked) >= expected
@@ -1095,14 +1114,17 @@ def _default_observe_evaluate(ctx: dict) -> dict:
     if not collection_ok:
         issues.append(f"采集不足: {len(collected)} 条 < {th_coll}")
         suggested_action = "search_expand"
-    if not ranking_ok:
+    if prescreen_too_strict:
+        issues.append(f"预筛过严: collected={len(collected)} -> ranked={len(ranked)} (预筛窗口过窄)")
+        suggested_action = "expand_threshold"
+    elif not ranking_ok:
         issues.append(f"排序不佳: top_score={top_score:.2f} < {th_rank}")
     if brief_quality <= 0:
         issues.append("简报未生成")
         suggested_action = suggested_action or "briefing"
     elif not briefing_ok:
         issues.append(f"简报质量低: score={brief_quality:.2f} < {th_brief}")
-    if not briefing_count_ok:
+    if not briefing_count_ok and not prescreen_too_strict:
         issues.append(f"简报条目不足: {len(ranked)}/{expected}")
         if suggest_expand:
             suggested_action = "expand_threshold"
@@ -1117,6 +1139,7 @@ def _default_observe_evaluate(ctx: dict) -> dict:
         "needs_retry": needs_retry,
         "issues": issues,
         "suggested_action": suggested_action,
+        "prescreen_too_strict": prescreen_too_strict,
     }
 
 hooks.register("observe.evaluate", _default_observe_evaluate)

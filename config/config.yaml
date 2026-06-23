@@ -32,6 +32,7 @@ agents:
   max_retry: 2                 # 简报重试上限
   max_sub_agents_per_plan: 3   # 单次 plan 子 Agent 数量上限
   max_same_agent_calls: 2      # 同一子 Agent 重复调度上限
+  max_turns: 5                 # P0-2.2: Agentic 最大轮数（超过强制收敛）
 
 # --- 排序 & 去重 ---
 ranking:
@@ -42,6 +43,7 @@ ranking:
   quality_threshold: 0.7       # 简报质量阈值
   cold_start_feedback_threshold: 3  # 冷启动→偏好切换所需反馈数
   half_life_hours: 24          # 时间衰减半衰期
+  prescreen_hours: 72          # P0-2.2: 预筛时间窗口（小时，默认 72=3天）
   source_diversity_bonus: 0    # 来源多样性加分（P0=0, P1=0.05）
 
 # --- 反馈系统 ---

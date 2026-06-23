@@ -99,3 +99,33 @@
 ### 回退策略
 
 改动在 develop 分支进行，main 分支保持 MVP 可用状态。任何问题可回退到上一 commit。
+
+---
+
+## P0 性能与 API 消耗优化（2026-06-23）
+
+### 2.1 enrich_metadata 批量处理优化
+
+**改动文件**：`agents/collection_agent.py`, `tools/tool_registry.py`, `tools/fc_tools.py`, `config/config.yaml`
+
+**本质**：将元数据增强从「逐条 LLM 调用」改为「批量处理 + 可关闭」模式。原来每条 RSS 条目都单独调一次 LLM 生成 category/keywords/importance，现在支持批量和开关控制。
+
+**改动要点**：
+- `config.yaml` 新增 `enrich_metadata` 段：`enabled`（开关）、`batch_size`（批量大小）、`max_items`（上限）
+- `enrich_metadata` 工具支持批量输入，单次调用处理多条
+- 关闭时（`enabled: false`）跳过 LLM 调用，直接返回默认元数据（category="其他", keywords="", importance=0.5）
+- 所有消费点（简报分类、排序权重、偏好学习）均有默认值兜底，关闭不影响系统稳定性
+
+### 2.2 observe_results 判断逻辑优化（避免不必要重跑）
+
+**改动文件**：`agents/main_agent.py`, `agents/ranking_agent.py`, `config/config.yaml`
+
+**本质**：把 observe 信号从「排序有问题，重来」修正为「窗口太窄，放宽就行」，让 LLM planner 做对决策的概率大幅提高。
+
+**根因**：采集 62 条 → 预筛 7 天 → 仅剩 1 条 → `top_score=0.25 < 0.3` → `ranking_ok=False` → `needs_retry=True` → 触发完整三板斧重跑。问题不在排序算法，而在预筛窗口过窄丢掉了太多条目。
+
+**改动要点**：
+- `_default_observe_evaluate` 新增 `prescreen_too_strict` 检测：采集充足但排序后条目极少时，强制 `ranking_ok=True`，`suggested_action="expand_threshold"`，避免误判为排序失败
+- `ranking_agent.py` 预筛窗口从硬编码 168h → 读 `config.yaml` 的 `ranking.prescreen_hours`（默认 72h）
+- `main_agent.py` `max_turns` 从硬编码 8 → 读 `config.yaml` 的 `agents.max_turns`（默认 5）
+- `config.yaml` 新增 `agents.max_turns: 5` 和 `ranking.prescreen_hours: 72`
