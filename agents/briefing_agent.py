@@ -11,6 +11,7 @@
 import json
 import re
 import os
+import time
 from datetime import datetime
 from typing import List, Dict, Any
 
@@ -389,7 +390,10 @@ def brief_quality_check_node(state: FeedLensState) -> dict:
     quality_detail = {"completeness": 0.0, "relevance": 0.0, "coherence": 0.0, "score": 0.0, "contradictions": []}
     categories = briefing.get("categories", [])
     total_items_in_brief = sum(len(cat.get("items", [])) for cat in categories)
-    completeness = min(1.0, total_items_in_brief / max(1, len(ranked_items)))
+    # P1-2.3: 分母取 min(len(ranked), 10)，因为 generate_briefing_node 最多取 10 条展示
+    # 避免 ranked=62 时 completeness 被压到 0.16 这种无法通过重试提升的困境
+    effective_max = min(len(ranked_items), 10)
+    completeness = min(1.0, total_items_in_brief / max(1, effective_max))
     quality_detail["completeness"] = completeness
     all_items = []
     for cat in categories:
@@ -475,6 +479,8 @@ def run_briefing_agent(state: FeedLensState) -> dict:
     Returns:
         dict: {briefing, brief_quality, quality_detail, briefing_result}
     """
+    t_agent_start = time.perf_counter()
+
     llm = _get_llm_provider()
     tools = tool_registry.get_schemas_for_phase("briefing")
 
@@ -509,12 +515,21 @@ def run_briefing_agent(state: FeedLensState) -> dict:
     brief_quality = 0.0
     quality_detail = {}
 
+    # 耗时统计
+    timing = {"llm_calls": [], "tool_calls": []}
+
     max_turns = 5
+    generate_count = 0  # P1-2.3: 硬限制 generate_briefing 调用次数
     for turn in range(max_turns):
+        t_turn_start = time.perf_counter()
         print(f"[briefing_react] 第 {turn + 1} 轮思考...", flush=True)
 
         try:
+            t_llm_start = time.perf_counter()
             response_dict = llm.chat_with_tools(messages=messages, tools=tools)
+            t_llm_elapsed = time.perf_counter() - t_llm_start
+            timing["llm_calls"].append({"turn": turn + 1, "elapsed": round(t_llm_elapsed, 3)})
+            print(f"[briefing_react]   └─ LLM 调用耗时: {t_llm_elapsed:.2f}s", flush=True)
         except Exception as e:
             print(f"[briefing_react] LLM 调用失败: {e}，退出循环", flush=True)
             break
@@ -554,13 +569,18 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                     if "goal_text" not in tool_args:
                         tool_args["goal_text"] = goal_text
 
+                t_tool_start = time.perf_counter()
                 try:
                     result = tool_registry.dispatch(tool_name, tool_args)
                 except Exception as e:
                     result = {"error": str(e)}
                     print(f"[briefing_react] 工具 {tool_name} 失败: {e}", flush=True)
+                t_tool_elapsed = time.perf_counter() - t_tool_start
+                timing["tool_calls"].append({"turn": turn + 1, "tool": tool_name, "elapsed": round(t_tool_elapsed, 3)})
+                print(f"[briefing_react]   └─ 工具 {tool_name} 耗时: {t_tool_elapsed:.2f}s", flush=True)
 
                 if tool_name == "generate_briefing":
+                    generate_count += 1
                     briefing = result.get("briefing", {})
                     current_state["briefing"] = briefing
                     current_state["briefing_result"] = result.get("briefing_result", {})
@@ -571,7 +591,8 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                     current_state["quality_detail"] = quality_detail
                 elif tool_name == "finish_task":
                     summary = result.get("summary", "")
-                    print(f"[briefing_react] 简报完成: quality={brief_quality:.4f}", flush=True)
+                    t_turn_total = time.perf_counter() - t_turn_start
+                    print(f"[briefing_react] 简报完成: quality={brief_quality:.4f}, 本轮耗时={t_turn_total:.2f}s", flush=True)
                     # 追加 finish_task 调用记录到 messages 历史（保持完整性，便于审计/重放）
                     messages.append(message)
                     messages.append({
@@ -579,12 +600,29 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                         "tool_call_id": tc.get("id", tool_name),
                         "content": json.dumps(result, ensure_ascii=False, default=str),
                     })
+                    t_agent_elapsed = time.perf_counter() - t_agent_start
+                    print(f"[briefing_react] ⏱️ 简报 Agent 总耗时: {t_agent_elapsed:.2f}s, ReAct 轮数: {turn + 1}, timing={timing}", flush=True)
                     return {
                         "briefing": briefing,
                         "brief_quality": brief_quality,
                         "quality_detail": quality_detail,
                         "briefing_result": current_state.get("briefing_result", {}),
                         "briefing_summary": summary,
+                        "briefing_timing": timing,
+                    }
+
+                # P1-2.3: 代码层硬限制 generate_briefing 调用次数，防 LLM 不守 prompt 无限重试
+                if generate_count >= 3:
+                    t_agent_elapsed = time.perf_counter() - t_agent_start
+                    print(f"[briefing_react] generate_briefing 已达 {generate_count} 次，强制 finish（质量={brief_quality:.4f}）", flush=True)
+                    print(f"[briefing_react] ⏱️ 简报 Agent 总耗时: {t_agent_elapsed:.2f}s, ReAct 轮数: {turn + 1}, timing={timing}", flush=True)
+                    return {
+                        "briefing": briefing,
+                        "brief_quality": brief_quality,
+                        "quality_detail": quality_detail,
+                        "briefing_result": current_state.get("briefing_result", {}),
+                        "briefing_summary": f"已达最大重试次数({generate_count})，强制收敛",
+                        "briefing_timing": timing,
                     }
 
                 messages.append(message)
@@ -593,6 +631,9 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                     "tool_call_id": tc.get("id", tool_name),
                     "content": json.dumps(result, ensure_ascii=False, default=str),
                 })
+
+            t_turn_total = time.perf_counter() - t_turn_start
+            print(f"[briefing_react] 第 {turn + 1} 轮完成，耗时: {t_turn_total:.2f}s", flush=True)
         else:
             content = message.get("content", "")
             print(f"[briefing_react] LLM 未调用工具，回复: {content[:100]}", flush=True)
@@ -604,13 +645,16 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                 continue
             break
 
+    t_agent_elapsed = time.perf_counter() - t_agent_start
     print(f"[briefing_react] 超过 {max_turns} 轮未完成，强制返回", flush=True)
+    print(f"[briefing_react] ⏱️ 简报 Agent 总耗时: {t_agent_elapsed:.2f}s, timing={timing}", flush=True)
     return {
         "briefing": briefing,
         "brief_quality": brief_quality,
         "quality_detail": quality_detail,
         "briefing_result": current_state.get("briefing_result", {}),
         "briefing_summary": "超时结束",
+        "briefing_timing": timing,
     }
 
 

@@ -129,3 +129,37 @@
 - `ranking_agent.py` 预筛窗口从硬编码 168h → 读 `config.yaml` 的 `ranking.prescreen_hours`（默认 72h）
 - `main_agent.py` `max_turns` 从硬编码 8 → 读 `config.yaml` 的 `agents.max_turns`（默认 5）
 - `config.yaml` 新增 `agents.max_turns: 5` 和 `ranking.prescreen_hours: 72`
+
+### 2.3 简报管线耗时统计
+
+**改动文件**：`utils/pipeline_runner.py`, `agents/briefing_agent.py`, `agents/main_agent.py`
+
+**本质**：为简报获取全链路添加三层耗时计时，让每次运行的性能瓶颈一目了然。之前没有任何计时，用户无法感知管线跑了多久、哪个环节最慢。
+
+**改动要点**：
+
+- **`utils/pipeline_runner.py` — 整体管线总耗时**
+  - `agent.invoke()` 前后包裹 `time.perf_counter()` 计时
+  - 日志输出：`[pipeline] ⏱️ 管线总耗时: 87.32s (1.5min)`
+  - 返回值新增 `elapsed_seconds` 字段
+
+- **`agents/briefing_agent.py` — 简报 Agent 细粒度计时（改动最大）**
+  - Agent 整体计时：从 `run_briefing_agent()` 入口到所有 return 出口的完整耗时
+  - ReAct 每轮计时：每轮 LLM 调用耗时 + 本轮总耗时（含所有工具执行）
+  - 各工具调用计时：`generate_briefing` / `quality_check` / `finish_task` 各自独立耗时
+  - 返回值新增 `briefing_timing` 结构化数据：`{llm_calls: [{turn, elapsed}, ...], tool_calls: [{turn, tool, elapsed}, ...]}`
+  - 日志示例：
+    ```
+    [briefing_react] 第 1 轮思考...
+    [briefing_react]   └─ LLM 调用耗时: 3.21s
+    [briefing_react]   └─ 工具 generate_briefing 耗时: 12.35s
+    [briefing_react] 第 1 轮完成，耗时: 15.56s
+    [briefing_react] ⏱️ 简报 Agent 总耗时: 24.90s, ReAct 轮数: 3
+    ```
+
+- **`agents/main_agent.py` — 各子 Agent 耗时**
+  - `invoke_sub_agent_node` 中为 Collection / Ranking / Briefing 三个子 Agent 各自计时
+  - 日志示例：`[invoke_sub_agent] Briefing 完成, 耗时=24.90s`
+  - 返回值新增 `agent_timing` 字段：`{"Collection": 15.2, "Ranking": 8.7, "Briefing": 24.9}`
+
+**不影响项**：仅新增计时日志和返回值字段，不改变任何业务逻辑、流程控制或 API 调用。

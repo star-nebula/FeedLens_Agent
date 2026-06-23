@@ -17,6 +17,7 @@ MVP 约束：
 import os
 import json
 import yaml
+import time
 from datetime import datetime
 from typing import List, Dict, Any
 
@@ -630,6 +631,8 @@ def invoke_sub_agent_node(state: FeedLensState) -> dict:
     current_state = dict(state)
     # 记录各子 Agent 执行状态：成功(success) / 失败(isolated) / 未执行(not_executed)
     agent_status = {}
+    # 记录各子 Agent 耗时
+    agent_timing = {}
 
     for step in plan:
         agent_name = step.get("agent", "")
@@ -653,21 +656,26 @@ def invoke_sub_agent_node(state: FeedLensState) -> dict:
         # 把 plan 的 params 注入当前 state，让子 Agent 能读到 expand_threshold / search_expand 等
         if isinstance(params, dict) and params:
             current_state = {**current_state, **params}
+
+        t_agent_start = time.perf_counter()
         result = run_with_isolation(
             f"sub_agent_{agent_name}",
             lambda b=builder, cs=current_state: b().invoke(cs),
             default_return={},
         )
+        t_agent_elapsed = time.perf_counter() - t_agent_start
+        agent_timing[agent_name] = round(t_agent_elapsed, 2)
+
         if isinstance(result, dict) and result:
             current_state.update(result)
             results[result_key] = result
             agent_status[agent_name] = "success"
             if agent_name == "Collection":
-                print(f"[invoke_sub_agent] Collection 完成: {len(result.get('collected_items', []))} 条", flush=True)
+                print(f"[invoke_sub_agent] Collection 完成: {len(result.get('collected_items', []))} 条, 耗时={t_agent_elapsed:.2f}s", flush=True)
             elif agent_name == "Ranking":
-                print(f"[invoke_sub_agent] Ranking 完成: {len(result.get('ranked_items', []))} 条", flush=True)
+                print(f"[invoke_sub_agent] Ranking 完成: {len(result.get('ranked_items', []))} 条, 耗时={t_agent_elapsed:.2f}s", flush=True)
             elif agent_name == "Briefing":
-                print(f"[invoke_sub_agent] Briefing 完成", flush=True)
+                print(f"[invoke_sub_agent] Briefing 完成, 耗时={t_agent_elapsed:.2f}s", flush=True)
         else:
             # 隔离返回默认值 {}（子 Agent 失败已记录日志），保留错误标记供 observe_results 评估
             results[f"{agent_name.lower()}_error"] = "isolated_failure"
@@ -685,6 +693,7 @@ def invoke_sub_agent_node(state: FeedLensState) -> dict:
         "ranking_result": results.get("ranking_result", {}),
         "briefing_result": results.get("briefing_result", {}),
         "agent_status": agent_status,  # 新增：各子 Agent 执行状态
+        "agent_timing": agent_timing,  # 新增：各子 Agent 耗时
     }
 
     # 仅当对应子 Agent 成功执行时才覆盖数据字段，防止隔离失败时残留旧数据

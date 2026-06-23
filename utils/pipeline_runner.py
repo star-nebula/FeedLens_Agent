@@ -3,6 +3,7 @@
 import sys
 import os
 import uuid
+import time
 from datetime import datetime
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -61,9 +62,13 @@ def run_agent_pipeline(trigger_type: str = "manual") -> dict:
             "session_id": session_id,
         }
 
-        # 运行管线
+        # 运行管线（计时）
         agent = build_main_agent()
+        t_start = time.perf_counter()
         result = agent.invoke(initial_state)
+        t_elapsed = time.perf_counter() - t_start
+
+        print(f"[pipeline] ⏱️ 管线总耗时: {t_elapsed:.2f}s ({t_elapsed/60:.1f}min)", flush=True)
 
         # 返回关键状态摘要
         return {
@@ -75,6 +80,7 @@ def run_agent_pipeline(trigger_type: str = "manual") -> dict:
             "push_status": result.get("push_status", "pending"),
             "issues": result.get("coordinator_observation", {}).get("issues", []),
             "error": result.get("error", None),
+            "elapsed_seconds": round(t_elapsed, 2),
         }
     finally:
         lock.release()
