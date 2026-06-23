@@ -1,253 +1,92 @@
-## FeedLens 改进验证与微调完整流程
+# enrich_metadata 批量处理优化 — 测试脚本说明
 
-### 阶段一：单元回归测试（确保改进不破坏现有行为）
+## 脚本路径
 
-按依赖从底层到顶层依次执行，每步确认 PASS：
+`scripts/test_enrich_metadata.py`
 
-```powershell
-# 1. 记忆系统（P0 依赖）
-python scripts/test_memory_manager.py
+## 目的
 
-# 2. 子 Agent 独立测试
-python scripts/test_collection_agent.py
-python scripts/test_ranking_agent.py
-python scripts/test_briefing_agent.py
+独立测试 `enrich_metadata` 工具在两种模式下的行为与性能：
 
-# 3. 主 Agent 节点逻辑（mock LLM/DB，验证 P0/P1 契约）
-python scripts/test_main_agent.py
-python scripts/test_main_agent_finishing.py
+1. **关闭模式（enabled=false，当前默认）** — 验证跳过 LLM、默认值正确、耗时极低
+2. **开启模式（enabled=true）** — 验证 LLM 增强正常（分类/关键词/重要性），以及 `batch_size` / `max_items` 生效
 
-# 4. 全链路集成（走完整 StateGraph，mock LLM）
-python scripts/test_integration.py
+## 用法
+
+```bash
+# 仅测试关闭模式（默认）
+python scripts/test_enrich_metadata.py
+
+# 测试关闭 + 开启两种模式
+python scripts/test_enrich_metadata.py --all
+
+# 仅测试开启模式
+python scripts/test_enrich_metadata.py --enabled
 ```
 
-**通过标准**：每个脚本输出末尾出现 `全部测试通过` 或 `ALL PASSED`，无 Exception 堆栈。
+## 环境要求
 
----
+- `config/config.yaml` 中配置好 DeepSeek API key
+- 工作目录为项目根目录
 
-### 阶段二：P0-P4 专项验证
+## 测试数据
 
-#### 2.1 P0 记忆接入 — 验证 planner 上下文含 memory 字段
+脚本内置 10 条模拟 RSS 采集结果（`MOCK_ITEMS`），覆盖中英文、多数据源，模拟真实采集格式。每条包含 `id`、`source_url`、`title`、`summary`、`content`、`url`、`published_at`。
 
-创建临时验证脚本，运行后删除：
+## 测试内容
 
-```powershell
-python -c "
-import sys; sys.path.insert(0,'.')
-from agents.main_agent import _build_planner_context
-state = {
-    'trigger_type':'daily_briefing','goal_text':'test','react_cycle_count':0,
-    'collected_items':[{'id':'1'}]*5,'ranking_detail':{'top_score':0.75},
-    'brief_quality':0.8,'ranked_items':[],'observation_result':{},
-    'search_supplemented':False,
-}
-ctx = _build_planner_context(state)
-print('memory字段存在:', 'memory' in ctx)
-print('recent_turns:', ctx['memory']['recent_turns'])
-print('relevant_history条数:', len(ctx['memory']['relevant_history']))
-print('P0验证通过' if 'memory' in ctx else 'P0验证失败')
-"
+### 测试 1：关闭模式（`test_disabled`--默认）
+
+| 验证项 | 预期值 |
+|--------|--------|
+| `category` | 全部为 `"其他"` |
+| `keywords` | 全部为空串 `""` |
+| `importance` | 全部为 `0.5` |
+| LLM 调用次数 | 0 |
+
+### 测试 2：开启模式（`test_enabled`）
+
+| 验证项 | 判定标准 |
+|--------|----------|
+| `category` | 至少有 2 种不同分类 |
+| `keywords` | 至少 1 条有关键词 |
+| `importance` | 至少 2 种不同重要性 |
+
+## 关键设计
+
+- **动态修改 config**：通过 `modify_config_enabled()` 临时修改 `config.yaml` 中 `enrich_metadata.enabled` 的值，测试结束后自动恢复为 `false`
+- **工具注册表调用**：不走直接函数调用，而是通过 `tool_registry.dispatch("enrich_metadata", ...)` 模拟真实工具调度路径
+- **性能对比**：当 `--all` 时，自动计算两种模式的耗时倍率和 API 调用节省估算
+
+## 输出示例
+
 ```
+============================================================
+  FeedLens enrich_metadata 批量处理优化 — 独立测试
+  开始时间: 2026-06-23 10:00:00
+============================================================
 
-**预期**：`memory字段存在: True`，首次运行 `relevant_history条数: 0`（不报错）。
+============================================================
+  测试 1/2: enrich_metadata 关闭模式 (enabled=false)
+============================================================
+  📝 config.yaml → enabled: false
+  🔧 配置: enabled=False, batch_size=20, max_items=100
+  📊 返回: count=10
+  ✅ 验证: category=10/10, keywords=10/10, importance=10/10
+  🎉 关闭模式测试通过！所有默认值正确。
+  ⏱ 总耗时: 0.015s
 
-#### 2.2 P1 Hook 化 — 验证 Hook 可替换
+============================================================
+  测试总结
+============================================================
+  enabled_false         | ✅ PASS   | 耗时 0.015s
+  enabled_true          | ✅ PASS   | 耗时 2.347s
+  ──────────────────────────────────────────
+  总耗时: 2.367s
 
-```powershell
-python -c "
-import sys; sys.path.insert(0,'.')
-from utils.hooks import hooks
-
-# 验证默认Hook已注册
-print('observe.evaluate注册数:', len(hooks._hooks.get('observe.evaluate',[])))
-print('reflect.check注册数:', len(hooks._hooks.get('reflect.check',[])))
-print('push.decide注册数:', len(hooks._hooks.get('push.decide',[])))
-
-# 验证自定义Hook可替换
-def custom_eval(ctx):
-    return {'needs_retry': False, 'issues': ['custom_check'], 'collection_ok': True}
-hooks.register('observe.evaluate', custom_eval)
-result = hooks.run('observe.evaluate', {'collected':[],'ranked':[],'top_score':0,'brief_quality':0})
-print('自定义Hook生效:', result.get('issues') == ['custom_check'])
-"
-```
-
-**预期**：三行注册数均 ≥1，`自定义Hook生效: True`。
-
-#### 2.3 P2 执行栅栏 — 并发跳过验证
-
-```powershell
-python -c "
-import threading, time
-from utils.pipeline_runner import run_agent_pipeline
-
-results = []
-def run():
-    results.append(run_agent_pipeline('manual'))
-
-t1 = threading.Thread(target=run)
-t2 = threading.Thread(target=run)
-t1.start(); t2.start()
-t1.join(); t2.join()
-
-statuses = [r['status'] for r in results]
-print('结果状态:', statuses)
-print('P2验证通过' if 'skipped' in statuses else 'P2验证失败(可能管线太快)')
-"
-```
-
-**预期**：一个 `completed`/`error`，一个 `skipped`。若两次都 completed（管线太快跑完），锁机制仍正确——可手动加 `time.sleep(2)` 在 `run_agent_pipeline` 入口临时验证。
-
-#### 2.4 P4 模型回退 — 验证 Router 降级
-
-```powershell
-python -c "
-import sys; sys.path.insert(0,'.')
-from utils.llm_provider import DeepSeekProvider, LLMRouter
-
-# 模拟：第一个Provider失败，第二个成功
-class FailProvider:
-    def chat(self, messages, temperature=0.7, max_tokens=4096, **kwargs):
-        raise Exception('模拟故障')
-    def chat_with_tools(self, messages, tools, temperature=0.7, max_tokens=4096, **kwargs):
-        raise Exception('模拟故障')
-
-class OkProvider:
-    def chat(self, messages, temperature=0.7, max_tokens=4096, **kwargs):
-        return 'fallback_ok'
-    def chat_with_tools(self, messages, tools, temperature=0.7, max_tokens=4096, **kwargs):
-        return {'choices':[{'message':{'content':'ok'}}]}
-
-router = LLMRouter([FailProvider(), OkProvider()], names=['fail','ok'])
-result = router.chat([{'role':'user','content':'hi'}])
-print('回退结果:', result)
-print('P4验证通过' if result == 'fallback_ok' else 'P4验证失败')
-"
-```
-
-**预期**：`回退结果: fallback_ok`。
-
----
-
-### 阶段三：真机端到端运行（连接真实 LLM/DB）
-
-**前提**：`config/config.yaml` 中 `${DEEPSEEK_API_KEY}` 已设为有效 key。
-
-```powershell
-# 单次管线真机运行（走完整采集→排序→简报→推送链路）
-python utils/pipeline_runner.py --trigger manual
-```
-
-**观察日志关键点**：
-| 日志标记 | 应出现的内容 |
-|---------|------------|
-| `[planner] memory:` | 显示记忆检索条数（P0） |
-| `[hooks]` | 无报错（P1） |
-| `[pipeline] 已有管线` | 正常单次不应出现（P2 正常） |
-| `[llm_router]` | 正常时不应出现（P4 主Provider正常） |
-| `[update_memory] planner 决策经验已写入` | 确认记忆写入（P0） |
-| `[update_memory] 执行日志写入成功` | 确认日志持久化 |
-
----
-
-### 阶段四：微调要点（根据运行结果调整）
-
-#### 4.1 记忆检索噪声过大 → 调阈值
-
-`config/config.yaml` 中 `memory.short_term_window` 默认 15，若 planner 上下文过长：
-```yaml
-memory:
-  short_term_window: 10    # 缩小窗口
-```
-对应代码 `agents/main_agent.py` 第253行 `n_recent=3, n_long_term=3`，可改为 `n_recent=2, n_long_term=2`。
-
-#### 4.2 模型回退频繁触发 → 检查备用 Provider
-
-查看日志中 `[llm_router]` 出现频率。若频繁，检查 `config/config.yaml` 中 `llm.fallback` 配置是否有效。不需要回退时可删掉 fallback 段，Router 只含一个 Provider 时行为等同直接调用。
-
-#### 4.3 Hook 策略需调整 → 注册新实现
-
-无需改 `main_agent.py`，在 `app.py` 启动时注册：
-
-```python
-# app.py 顶部添加
-from utils.hooks import hooks
-
-def my_observe_evaluate(ctx):
-    # 自定义质量评估逻辑
-    return {"needs_retry": False, "issues": [], "collection_ok": True}
-
-hooks.register("observe.evaluate", my_observe_evaluate)
-```
-
-#### 4.4 管线执行太慢 → 关注 ReAct 循环次数
-
-日志中 `ReAct 第 N 轮`，若频繁到第 3 轮，考虑收紧 `config/config.yaml`：
-```yaml
-agents:
-  max_react_cycles: 2    # 减少循环上限
-```
-
----
-
-### 阶段五：持续观察（运行 1-2 周）
-
-启动 Streamlit UI 日常使用：
-
-```powershell
-streamlit run app.py
-```
-
-**每周检查**：
-1. `data/feedlens.db` → `execution_logs` 表，确认 `brief_quality_score` 趋势是否上升（记忆生效标志）
-2. `data/chroma/` 长期记忆向量数量是否增长
-3. UI 日志页是否有异常 `skipped` 或 `error` 状态
-
----
-
-### 快速检查清单
-
-| 步骤 | 命令 | 通过标志 |
-|------|------|---------|
-| 单元测试 | `python scripts/test_memory_manager.py` 等 6 个 | 全部 PASS |
-| P0 验证 | 阶段二 2.1 一行命令 | `memory字段存在: True` |
-| P1 验证 | 阶段二 2.2 一行命令 | 注册数≥1, 自定义生效 |
-| P2 验证 | 阶段二 2.3 一行命令 | 出现 `skipped` |
-| P4 验证 | 阶段二 2.4 一行命令 | `回退结果: fallback_ok` |
-| 真机运行 | `python utils/pipeline_runner.py --trigger manual` | 无 Exception，日志完整 |
-| UI 启动 | `streamlit run app.py` | 页面正常渲染 |
-
----
-
-### 附录：其他可用测试脚本（来自 MVP 阶段）
-
-以下命令在 MVP 开发阶段使用，部分已融入阶段一单元测试，保留供参考：
-
-```powershell
-# 数据库初始化验证
-python scripts/init_db.py
-
-# Embedding 推理速度（< 100ms/条）
-python scripts/test_embedding_speed.py
-
-# FC 工具验证
-python scripts/test_fc_tools.py
-
-# 去重阈值校准（需标注样本）
-python scripts/calibrate_dedup.py --samples data/labeled_dedup_samples.json
-
-# 推送机制
-python scripts/test_push_scheduler.py
-
-# 反馈机制
-python scripts/test_feedback_agent.py
-
-# 冷启动→偏好自适应切换
-python scripts/test_cold_start_switch.py
-
-# 日志和监控
-python scripts/test_logging_monitoring.py
-
-# 性能基准测试
-python scripts/test_performance.py
+  💡 对比分析:
+     关闭模式耗时: 0.015s
+     开启模式耗时: 2.347s
+     开启/关闭倍率: 156.5x
+     月省 API 调用约: ~1 次 (基于 batch_size=20)
 ```
