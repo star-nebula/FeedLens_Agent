@@ -411,13 +411,13 @@ TOOLS = [
     # ---- 排序阶段 ----
     {
         "name": "deduplicate",
-        "description": "向量相似度去重：高相似度（≥0.88）直接判重，低相似度（≤0.70）保留，中间区间 LLM 裁决。",
+        "description": "向量相似度去重：高相似度（≥0.88）直接判重，低相似度（≤0.70）保留，中间区间 LLM 裁决。⚠️ items 参数由系统自动注入，请勿手动传参。",
         "parameters": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
-                    "description": "待去重的条目列表",
+                    "description": "待去重的条目列表（由系统自动注入，无需手动传参）",
                 },
                 "threshold_high": {
                     "type": "number",
@@ -428,20 +428,20 @@ TOOLS = [
                     "description": "低阈值，≤此值保留，默认 0.70",
                 },
             },
-            "required": ["items"],
+            "required": [],
         },
         "fn": _execute_deduplicate,
         "phase": "ranking",
     },
     {
         "name": "rank_items",
-        "description": "多因子加权排序：综合相似度、时效性、用户偏好、重要性四个维度计算最终排名。",
+        "description": "多因子加权排序：综合相似度、时效性、用户偏好、重要性四个维度计算最终排名。⚠️ items 参数由系统自动注入，请勿手动传参。",
         "parameters": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
-                    "description": "待排序的条目列表",
+                    "description": "待排序的条目列表（由系统自动注入，无需手动传参）",
                 },
                 "user_id": {
                     "type": "integer",
@@ -452,7 +452,7 @@ TOOLS = [
                     "description": "最多返回条数，默认 10",
                 },
             },
-            "required": ["items"],
+            "required": [],
         },
         "fn": _execute_rank_items,
         "phase": "ranking",
@@ -460,13 +460,13 @@ TOOLS = [
     # ---- 简报阶段 ----
     {
         "name": "generate_briefing",
-        "description": "根据排序后的条目生成结构化 JSON 简报，包含标题、摘要、分类分组、Markdown 渲染。",
+        "description": "根据排序后的条目生成结构化 JSON 简报，包含标题、摘要、分类分组、Markdown 渲染。⚠️ items 参数由系统自动注入，请勿手动传参。",
         "parameters": {
             "type": "object",
             "properties": {
                 "items": {
                     "type": "array",
-                    "description": "排序后的条目列表",
+                    "description": "排序后的条目列表（由系统自动注入，无需手动传参）",
                 },
                 "goal_text": {
                     "type": "string",
@@ -478,7 +478,7 @@ TOOLS = [
                     "description": "分类列表，默认 ['科技', '商业', '社会', '其他']",
                 },
             },
-            "required": ["items"],
+            "required": [],
         },
         "fn": _execute_generate_briefing,
         "phase": "briefing",

@@ -184,55 +184,66 @@ def render():
                 created_at_display = created_at
             st.caption(f"生成时间: {created_at_display}")
 
-            # 显示 Markdown 内容
-            if brief["content_md"]:
-                with st.expander("📄 查看简报内容", expanded=False):
-                    st.markdown(brief["content_md"])
-
-            # 显示关联条目（含反馈按钮）
+            # 合并显示：Markdown 内容 + 反馈图标在同一个 expander 中
             items = _load_brief_items(brief_id)
-            if items:
-                with st.expander(f"📋 关联条目 ({len(items)} 条)", expanded=False):
-                    for item in items:
-                        item_id = item["item_id"]
-                        title = item["title"] or "无标题"
-                        score = item["final_score"] or 0
-                        highlight = "⭐ " if item["is_highlight"] else ""
-
-                        # 条目信息行
-                        info_col, fb_col = st.columns([4, 1])
-                        with info_col:
-                            st.markdown(
-                                f"""
-                                **{highlight}{item['rank']}. {title}**
-                                - 评分: {score:.3f}
-                                - [查看原文]({item['url'] or '#'})
-                                """
-                            )
-                            if item["summary"]:
-                                st.caption(item["summary"][:200] + "...")
-
-                        # 反馈按钮列
-                        with fb_col:
-                            existing_fb = _check_item_feedback(item_id)
-                            if existing_fb:
-                                # 已有反馈，显示当前状态
-                                fb_label = {"like": "👍 已喜欢", "dislike": "👎 已不喜欢", "irrelevant": "🚫 已标不相关"}
-                                st.caption(fb_label.get(existing_fb, existing_fb))
-                            else:
-                                # 无反馈，显示反馈按钮
+            has_content = bool(brief.get("content_md"))
+            has_items = bool(items)
+            if has_content or has_items:
+                item_count = len(items) if items else 0
+                label = f"📄 查看简报内容 ({item_count} 条)"
+                with st.expander(label, expanded=False):
+                    # 1) Markdown 正文
+                    if has_content:
+                        st.markdown(brief["content_md"])
+                    # 2) 逐条目反馈图标行（紧接 Markdown 下方）
+                    if items:
+                        # 用 JSON 解析 content_json 获取 categories 结构，匹配 item_id
+                        item_map = {item["item_id"]: item for item in items}
+                        brief_json = {}
+                        try:
+                            brief_json = json.loads(brief.get("content_json", "{}"))
+                        except (json.JSONDecodeError, TypeError):
+                            pass
+                        categories = brief_json.get("categories", [])
+                        for cat in categories:
+                            cat_items = cat.get("items", [])
+                            for idx, entry in enumerate(cat_items):
+                                entry_id = entry.get("id", "")
+                                # 尝试匹配 item_id（entry.id 可能是字符串/数字混合）
+                                matched = None
+                                for item in items:
+                                    if str(item["item_id"]) == str(entry_id):
+                                        matched = item
+                                        break
+                                if not matched:
+                                    continue
+                                item_id = matched["item_id"]
+                                existing_fb = _check_item_feedback(item_id)
+                                # 反馈图标行
                                 fb_key = f"fb_{brief_id}_{item_id}"
-                                fb_type = st.selectbox(
-                                    "反馈",
-                                    ["", "👍 喜欢", "👎 不喜欢", "🚫 不相关"],
-                                    key=f"fb_select_{fb_key}",
-                                    label_visibility="collapsed",
-                                )
-                                if fb_type:
-                                    fb_map = {"👍 喜欢": "like", "👎 不喜欢": "dislike", "🚫 不相关": "irrelevant"}
-                                    _add_feedback_with_agent(item_id, fb_map[fb_type], brief_id)
-                                    st.toast(f"✅ 反馈已记录：{fb_type}")
-                                    st.rerun()
+                                if existing_fb:
+                                    icon_map = {"like": "❤️", "dislike": "💔", "irrelevant": "🚫"}
+                                    st.caption(f"{icon_map.get(existing_fb, '')} 已反馈：{existing_fb}")
+                                else:
+                                    c1, c2, c3, c4 = st.columns([1, 1, 1, 7])
+                                    with c1:
+                                        if st.button("👍", key=f"like_{fb_key}", help="喜欢"):
+                                            _add_feedback_with_agent(item_id, "like", brief_id)
+                                            st.toast("✅ 已标记：喜欢")
+                                            st.rerun()
+                                    with c2:
+                                        if st.button("👎", key=f"dislike_{fb_key}", help="不喜欢"):
+                                            _add_feedback_with_agent(item_id, "dislike", brief_id)
+                                            st.toast("✅ 已标记：不喜欢")
+                                            st.rerun()
+                                    with c3:
+                                        if st.button("🚫", key=f"irr_{fb_key}", help="不相关"):
+                                            _add_feedback_with_agent(item_id, "irrelevant", brief_id)
+                                            st.toast("✅ 已标记：不相关")
+                                            st.rerun()
+                                # 只在主条目（idx==0）显示反馈，子条目不重复显示
+                                if idx == 0:
+                                    st.markdown("")  # 间距
 
             st.markdown("---")
 

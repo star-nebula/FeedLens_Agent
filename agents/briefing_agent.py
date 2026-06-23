@@ -154,7 +154,7 @@ def _build_item_index(ranked_items: List[Dict[str, Any]]) -> Dict[str, Dict[str,
     return index
 
 
-_BACKFILL_FIELDS = ["published_at", "source", "url", "importance", "category"]
+_BACKFILL_FIELDS = ["published_at", "source", "url", "importance", "category", "final_score"]
 
 
 def _backfill_briefing_items(briefing: Dict[str, Any], item_index: Dict[str, Dict[str, Any]]) -> None:
@@ -165,13 +165,16 @@ def _backfill_briefing_items(briefing: Dict[str, Any], item_index: Dict[str, Dic
             if not orig:
                 continue
             for field in _BACKFILL_FIELDS:
-                orig_val = orig.get(field)
+                # ranking_agent 输出字段是 _score，映射到 final_score
+                orig_field = "_score" if field == "final_score" else field
+                orig_val = orig.get(orig_field)
                 if orig_val not in (None, "", []):
                     cur = item.get(field)
                     if cur in (None, "", []):
                         item[field] = orig_val
                     else:
-                        if isinstance(orig_val, (int, float)) or field in ("source", "url"):
+                        # BUG-001: published_at 也需强制覆盖（LLM 可能生成不准确的日期）
+                        if isinstance(orig_val, (int, float)) or field in ("source", "url", "published_at"):
                             item[field] = orig_val
                 elif item.get(field) in (None, "", []):
                     if field == "published_at":
@@ -221,9 +224,26 @@ def _format_importance(raw) -> str:
 
 
 def _render_markdown(briefing: Dict[str, Any]) -> str:
+    """将简报渲染为统一 Markdown 格式，分类标题 + 条目信息在同一个文本块内。
+
+    输出格式示例：
+        # 派早报：英特尔将为苹果代工芯片
+        > 英特尔将为苹果代工芯片...
+
+        ## 数据安全与隐私 (1条)
+        **Meta因数据安全问题暂停追踪员工鼠标活动的AI训练项目**
+        摘要: Meta暂停用于AI训练的内部数据追踪项目。
+        链接: https://...
+        - 来源: 36氪 | 时间: 2026-06-21 23:13:00 | 重要性: 4/5 | 评分: 0.344
+        还有 3 篇类似报道:
+        - xxx
+        - xxx
+    """
     lines = [f"# {briefing.get('title', '简报')}", ""]
-    lines.append(f"> {briefing.get('summary', '')}")
-    lines.append("")
+    summary = briefing.get('summary', '')
+    if summary:
+        lines.append(f"> {summary}")
+        lines.append("")
     for cat in briefing.get("categories", []):
         cat_name = cat.get("name", "未分类")
         items = cat.get("items", [])
@@ -233,28 +253,45 @@ def _render_markdown(briefing: Dict[str, Any]) -> str:
         lines.append(f"## {cat_name} ({count}条)")
         lines.append("")
         main_item = items[0]
-        lines.append(f"### {main_item.get('title', '')}")
+        # 主条目标题（粗体）
+        lines.append(f"**{main_item.get('title', '')}**")
         lines.append("")
-        lines.append(f"**摘要**: {main_item.get('summary', '')}")
-        lines.append("")
+        # 摘要
+        item_summary = main_item.get('summary', '')
+        if item_summary:
+            lines.append(f"摘要: {item_summary}")
+            lines.append("")
+        # 链接
         url = main_item.get("url", "")
         if url:
-            lines.append(f"**链接**: {url}")
+            lines.append(f"链接: {url}")
             lines.append("")
-        lines.append(
-            f"- 来源: {main_item.get('source', 'unknown')} | "
-            f"时间: {_format_datetime(main_item.get('published_at', ''))} | "
-            f"重要性: {_format_importance(main_item.get('importance', 0.5))}"
-        )
+        # 元信息行：- 来源 | 时间 | 重要性 | 评分
+        meta_parts = []
+        meta_parts.append(f"来源: {main_item.get('source', 'unknown')}")
+        pub_time = _format_datetime(main_item.get('published_at', ''))
+        meta_parts.append(f"时间: {pub_time}" if pub_time else "时间: 未知")
+        meta_parts.append(f"重要性: {_format_importance(main_item.get('importance', 0.5))}")
+        score = main_item.get('final_score') or main_item.get('score')
+        if score is not None:
+            try:
+                score_val = float(score)
+                meta_parts.append(f"评分: {score_val:.3f}")
+            except (TypeError, ValueError):
+                pass
+        lines.append(f"- {' | '.join(meta_parts)}")
         lines.append("")
+        # 类似报道（加冒号）
         similar_count = main_item.get("similar_count", 0)
         if similar_count > 0:
-            lines.append(f"> 还有 {similar_count} 篇类似报道")
-            lines.append("")
+            lines.append(f"还有 {similar_count} 篇类似报道:")
+        # 子条目标题列表（全部展开）
         if len(items) > 1:
-            lines.append("**其他报道:**")
             for item in items[1:]:
-                lines.append(f"- {item.get('title', '')}")
+                title = item.get('title', '')
+                if title:
+                    lines.append(f"- {title}")
+        if similar_count > 0 or len(items) > 1:
             lines.append("")
     lines.append(f"\n---\n*生成时间: {briefing.get('generated_at', '')}*")
     return "\n".join(lines)
