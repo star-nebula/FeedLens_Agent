@@ -18,6 +18,7 @@ import os
 import json
 import yaml
 import time
+import hashlib
 from datetime import datetime
 from typing import List, Dict, Any
 
@@ -1068,6 +1069,45 @@ def update_memory_node(state: FeedLensState) -> dict:
             print(f"[update_memory] 偏好向量更新完成", flush=True)
         except Exception as e:
             print(f"[update_memory] 偏好向量更新失败: {e}", flush=True)
+
+    # 🆕 写入条目历史向量到 ChromaDB feed_items（用于跨批次预过滤去重）
+    # 使用 URL+title hash 作为 ChromaDB ID，确保幂等：相同条目多次执行不产生重复向量
+    if ranked_items:
+        try:
+            embedding_model2 = EmbeddingModel()
+            vs2 = VectorStore(persist_dir="data/chroma", embedding_fn=embedding_model2.encode)
+            vs2.init_collections()
+
+            now_iso = datetime.now().isoformat()
+            ids, docs, metas = [], [], []
+            for item in ranked_items:
+                url = item.get("url", "")
+                title = item.get("title", "")
+                summary = item.get("summary", "")
+                text = f"{title} {summary}".strip()
+                if not text:
+                    continue
+                # 使用 URL+title 的 SHA256 hash 作为 ChromaDB ID，确保同内容幂等
+                content_key = f"{url}|{title}"
+                item_hash = hashlib.sha256(content_key.encode("utf-8")).hexdigest()[:32]
+                ids.append(item_hash)
+                docs.append(text)
+                metas.append({
+                    "created_at": now_iso,
+                    "url": url,
+                    "source": item.get("source_name", item.get("source", "")),
+                    "title": title[:200],
+                })
+            if ids:
+                vs2.upsert_items(
+                    collection="feed_items",
+                    ids=ids,
+                    documents=docs,
+                    metadatas=metas,
+                )
+                print(f"[update_memory] 条目历史向量写入 ChromaDB: {len(ids)} 条", flush=True)
+        except Exception as e:
+            print(f"[update_memory] 条目历史向量写入失败（不影响主流程）: {e}", flush=True)
 
     return {
         "execution_log": execution_log,

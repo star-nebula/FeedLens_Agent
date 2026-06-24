@@ -65,6 +65,27 @@ class EmbeddingModel:
         """编码单条文本。"""
         return self.encode([text])[0]
 
+    def batch_encode(
+        self,
+        texts: list[str],
+        normalize: bool = True,
+    ) -> list[list[float]]:
+        """批量编码文本为向量列表，直接返回 list[list[float]] 格式。
+
+        相比 encode() 返回 np.ndarray，此方法返回 Python 原生列表，
+        方便直接传给 ChromaDB query_embeddings 或 upsert。
+
+        Returns:
+            list[list[float]]，每个子列表长度为 384
+        """
+        self.load()
+        embeddings = self._model.encode(
+            texts,
+            normalize_embeddings=normalize,
+            show_progress_bar=False,
+        )
+        return embeddings.tolist()
+
     def verify_speed(self, sample_texts: list[str] = None) -> float:
         """验证推理速度，返回 ms/条。"""
         if sample_texts is None:

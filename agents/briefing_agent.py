@@ -338,6 +338,85 @@ def _llm_assess_quality(items: list[dict], goal_text: str, llm: DeepSeekProvider
         return [0.5] * len(items), []
 
 
+def _preflight_for_briefing(ranked_items: list, max_items: int = 10, min_score: float = 0.15) -> dict:
+    """简报生成前硬编码预检：消除可控扣分因素（无 LLM 调用）。
+
+    处理：
+    1. 过滤低质条目（_score < min_score 或无标题）
+    2. URL 完全相同的条目 → 合并（保留 importance 更高的）
+    3. 时间跨度 > 7 天 → 生成警告
+    4. 条目数量 < 5 → 生成警告
+
+    Args:
+        ranked_items: 排序后的条目列表
+        max_items: 简报最多展示条目数（用于 completeness 预判）
+        min_score: 最低分数阈值
+
+    Returns:
+        {"items": 预处理后的条目列表, "warnings": 警告列表, "dropped": 丢弃数}
+    """
+    warnings = []
+    if not ranked_items:
+        return {"items": [], "warnings": [], "dropped": 0}
+
+    # 1. 过滤低质条目
+    filtered = []
+    for item in ranked_items:
+        score = item.get("_score", item.get("final_score", 0))
+        title = (item.get("title", "") or "").strip()
+        if score < min_score or len(title) < 3:
+            continue
+        filtered.append(item)
+
+    # 2. URL 去重合并（保留 importance 更高的）
+    seen_urls = {}  # url -> item
+    deduped = []
+    for item in filtered:
+        url = item.get("url", "")
+        if url and url in seen_urls:
+            existing = seen_urls[url]
+            if item.get("importance", 0) > existing.get("importance", 0):
+                # 替换已有条目
+                idx = deduped.index(existing)
+                deduped[idx] = item
+                seen_urls[url] = item
+        else:
+            if url:
+                seen_urls[url] = item
+            deduped.append(item)
+
+    # 3. 时间跨度检查
+    from datetime import datetime as dt_module
+    times = []
+    for item in deduped:
+        t = item.get("published_at", "")
+        if t:
+            try:
+                times.append(dt_module.fromisoformat(t.replace("Z", "+00:00")))
+            except Exception:
+                pass
+    if len(times) >= 2 and (max(times) - min(times)).days > 7:
+        span_days = (max(times) - min(times)).days
+        warnings.append({
+            "type": "large_time_span",
+            "detail": f"条目时间跨度 {span_days} 天，建议按时间分组"
+        })
+
+    # 4. 条目数量检查
+    if len(deduped) < 5:
+        warnings.append({
+            "type": "too_few_items",
+            "detail": f"仅 {len(deduped)} 条有效条目，completeness 最多 {len(deduped) / max(max_items, 1):.2f}"
+        })
+
+    dropped = len(ranked_items) - len(deduped)
+    if dropped > 0:
+        print(f"[preflight_briefing] 预检丢弃/合并 {dropped} 条 "
+              f"({len(ranked_items)}→{len(deduped)})", flush=True)
+
+    return {"items": deduped[:max_items * 2], "warnings": warnings, "dropped": dropped}
+
+
 def _check_contradiction(item1: Dict, item2: Dict) -> bool:
     t1 = item1.get("published_at", "")
     t2 = item2.get("published_at", "")
@@ -370,7 +449,17 @@ def generate_briefing_node(state: FeedLensState) -> dict:
     goal_text = state.get("goal_text", "用户关注热点新闻")
     categories = state.get("categories", DEFAULT_CATEGORIES)
     retry_count = state.get("briefing_result", {}).get("retry_count", 0)
-    print(f"[generate_briefing] 第 {retry_count + 1} 次生成，简报条目数: {len(ranked_items)}", flush=True)
+
+    # P1-08: 生成前硬编码预检
+    config = load_config()
+    prescreen_min_score = config.get("ranking", {}).get("briefing_prescreen_min_score", 0.15)
+    preflight = _preflight_for_briefing(ranked_items, max_items=MAX_ITEMS_PER_BRIEFING,
+                                        min_score=prescreen_min_score)
+    ranked_items = preflight["items"]
+    preflight_warnings = preflight["warnings"]
+
+    print(f"[generate_briefing] 第 {retry_count + 1} 次生成，预检后条目数: {len(ranked_items)}", flush=True)
+
     if not ranked_items:
         empty_briefing = {
             "title": "暂无内容", "summary": "当前没有符合条件的新闻条目",
@@ -378,11 +467,18 @@ def generate_briefing_node(state: FeedLensState) -> dict:
         }
         return {
             "briefing": empty_briefing,
-            "briefing_result": {"briefing": empty_briefing, "brief_quality": 1.0, "retry_count": retry_count},
+            "briefing_result": {"briefing": empty_briefing, "brief_quality": 1.0, "retry_count": retry_count,
+                                "_preflight_warnings": preflight_warnings},
         }
     items_to_show = ranked_items[:MAX_ITEMS_PER_BRIEFING]
     grouped = _group_by_category(items_to_show, categories)
     prompt = _build_briefing_prompt(grouped, goal_text, categories)
+
+    # P1-08: 注入预检警告到 prompt
+    if preflight_warnings:
+        warn_text = "\n".join(f"- [{w['type']}] {w['detail']}" for w in preflight_warnings)
+        prompt += f"\n\n## ⚠️ 预检警告（请关注）\n{warn_text}\n"
+
     try:
         llm = _get_llm_provider()
         response = llm.chat([{"role": "user", "content": prompt}])
@@ -416,47 +512,71 @@ def generate_briefing_node(state: FeedLensState) -> dict:
     print(f"[generate_briefing] 完成: {briefing.get('title', 'untitled')}", flush=True)
     return {
         "briefing": briefing,
-        "briefing_result": {"briefing": briefing, "brief_quality": 0.0, "retry_count": retry_count},
+        "briefing_result": {"briefing": briefing, "brief_quality": 0.0, "retry_count": retry_count,
+                            "_preflight_warnings": preflight_warnings},
     }
 
 
 def brief_quality_check_node(state: FeedLensState) -> dict:
+    """简报质量审查（P1-08: coherence 规则检测已移到预检阶段）。
+
+    评分公式不变：score = completeness×0.3 + relevance×0.4 + coherence×0.3
+
+    关键变更：
+    - coherence 仅基于 LLM 返回的事实矛盾计算（URL/时间/重要性规则已移至预检）
+    - relevance 独立 LLM 评估仅首次调用，后续重试复用缓存
+    """
     briefing = state.get("briefing", {})
     ranked_items = state.get("ranked_items", [])
     goal_text = state.get("goal_text", "")
+    briefing_result = state.get("briefing_result", {})
+
     quality_detail = {"completeness": 0.0, "relevance": 0.0, "coherence": 0.0, "score": 0.0, "contradictions": []}
+
+    # completeness: 硬编码计算（不变）
     categories = briefing.get("categories", [])
     total_items_in_brief = sum(len(cat.get("items", [])) for cat in categories)
-    # P1-2.3: 分母取 min(len(ranked), 10)，因为 generate_briefing_node 最多取 10 条展示
-    # 避免 ranked=62 时 completeness 被压到 0.16 这种无法通过重试提升的困境
     effective_max = min(len(ranked_items), 10)
     completeness = min(1.0, total_items_in_brief / max(1, effective_max))
     quality_detail["completeness"] = completeness
+
     all_items = []
     for cat in categories:
         all_items.extend(cat.get("items", []))
-    llm_scores = []
-    llm_contradictions_raw = []
-    relevance = 0.5
-    if all_items and goal_text:
+
+    # relevance: 独立 LLM 评估（仅首次调用，后续复用缓存）
+    cached_relevance = briefing_result.get("_cached_relevance")
+    if cached_relevance is not None:
+        relevance = cached_relevance
+        print(f"[brief_quality_check] 复用缓存 relevance: {relevance:.4f}", flush=True)
+    elif all_items and goal_text:
         try:
             llm = _get_llm_provider()
             relevance_scores, llm_contradictions_raw = _llm_assess_quality(all_items, goal_text, llm)
             if relevance_scores:
                 relevance = sum(relevance_scores) / len(relevance_scores)
+            else:
+                relevance = 0.5
+            # 缓存 relevance 供后续重试复用
+            briefing_result["_cached_relevance"] = relevance
+            # 处理 LLM 返回的矛盾
+            for c in llm_contradictions_raw:
+                quality_detail["contradictions"].append({
+                    "item_a": c.get("item_a", ""),
+                    "item_b": c.get("item_b", ""),
+                    "reason": c.get("reason", "LLM detected"),
+                })
         except Exception as e:
-            print(f"[brief_quality_check] LLM relevance 失败，回退: {e}", flush=True)
+            print(f"[brief_quality_check] LLM relevance 失败: {e}", flush=True)
+            relevance = 0.5
+    else:
+        relevance = 0.5
     relevance = min(1.0, max(0.0, relevance))
     quality_detail["relevance"] = relevance
-    contradictions = []
-    for i in range(len(all_items)):
-        for j in range(i + 1, len(all_items)):
-            if _check_contradiction(all_items[i], all_items[j]):
-                contradictions.append({"item_a": all_items[i].get("id", ""), "item_b": all_items[j].get("id", ""), "reason": "detected by rule"})
-    for c in llm_contradictions_raw:
-        pair = (c["item_a"], c["item_b"])
-        if not any((p["item_a"], p["item_b"]) == pair or (p["item_b"], p["item_a"]) == pair for p in contradictions):
-            contradictions.append(c)
+
+    # coherence: 仅基于 LLM 返回的事实矛盾（规则检测已在预检阶段处理）
+    # P1-08: _check_contradiction 的 URL/时间/重要性规则不再在此执行
+    contradictions = quality_detail["contradictions"]
     if len(contradictions) == 0:
         coherence = 1.0
     elif len(contradictions) <= 2:
@@ -464,12 +584,13 @@ def brief_quality_check_node(state: FeedLensState) -> dict:
     else:
         coherence = 0.3
     quality_detail["coherence"] = coherence
-    quality_detail["contradictions"] = contradictions
+
     score = (completeness * 0.3 + relevance * 0.4 + coherence * 0.3)
     quality_detail["score"] = score
-    briefing_result = state.get("briefing_result", {})
+
     briefing_result["brief_quality"] = score
     briefing_result["quality_detail"] = quality_detail
+
     print(
         f"[brief_quality_check] 综合评分: {score:.4f} "
         f"(completeness={completeness:.2f}, relevance={relevance:.2f}, coherence={coherence:.2f})",
@@ -488,18 +609,17 @@ BRIEFING_SYSTEM_PROMPT = """你是 FeedLens 的简报 Agent。你的目标是根
 
 可用工具：
 - generate_briefing: 根据排序条目生成结构化 JSON 简报
-- quality_check: 四维质量审查（完整性、相关性、一致性、综合评分）
 - finish_task: 标记简报生成完成
 
 工作流程（严格按顺序执行）：
-1. 调用 generate_briefing 生成简报
-2. 调用 quality_check 审查质量
-3. 如果质量评分 >= 0.7，立即调用 finish_task 结束，不要再生成新简报
-4. 如果质量评分 < 0.7，重新调用 generate_briefing（最多重试 2 次），然后直接 finish_task
+1. 调用 generate_briefing 生成简报（系统会自动评估质量并反馈）
+2. 如果系统反馈质量达标，调用 finish_task 结束
+3. 如果系统反馈需要重试，重新调用 generate_briefing（最多重试 2 次），然后直接 finish_task
 
 重要规则：
-- quality_check 评分 >= 0.7 时，不要再调用 generate_briefing，直接 finish_task
-- 整个流程最多调用 3 次 generate_briefing，达到上限后直接 finish_task
+- 简报中每条条目必须保留完整 id（从输入中复制），不要自己编造 id
+- 系统会自动判断质量，你只需要按照指令生成和结束
+- 整个流程最多调用 3 次 generate_briefing（含首次），达到上限后直接 finish_task
 - 完成后必须调用 finish_task，不要无限循环优化"""
 
 
@@ -508,7 +628,13 @@ BRIEFING_SYSTEM_PROMPT = """你是 FeedLens 的简报 Agent。你的目标是根
 # ============================================================
 
 def run_briefing_agent(state: FeedLensState) -> dict:
-    """ReAct 简报 Agent — LLM 自主迭代生成+审查直到质量达标。
+    """ReAct 简报 Agent — 生成后自动评估+自动重试（P1-08: 消除 ReAct 思考）。
+
+    核心变更：
+    - 移除 quality_check 工具：生成后代码层自动调用 brief_quality_check_node
+    - relevance 缓存复用：仅在首次生成后调用 quality LLM
+    - 重试上限从 3 降为 2（可控扣分因素已在预检中消除）
+    - max_turns 从 5 降为 4（单轮 2 步 generate→finish_task，2次重试=3轮 generate）
 
     Args:
         state: FeedLensState，包含 ranked_items, goal_text 等
@@ -524,6 +650,10 @@ def run_briefing_agent(state: FeedLensState) -> dict:
     ranked_items = state.get("ranked_items", [])
     goal_text = state.get("goal_text", "用户关注热点新闻")
     categories = state.get("categories", DEFAULT_CATEGORIES)
+
+    # 读取配置
+    config = load_config()
+    max_retries = config.get("ranking", {}).get("briefing_max_retries", 2)
 
     user_msg = f"排序条目数: {len(ranked_items)}\n用户目标: {goal_text}\n分类: {categories}"
 
@@ -555,8 +685,8 @@ def run_briefing_agent(state: FeedLensState) -> dict:
     # 耗时统计
     timing = {"llm_calls": [], "tool_calls": []}
 
-    max_turns = 5
-    generate_count = 0  # P1-2.3: 硬限制 generate_briefing 调用次数
+    max_turns = 4  # P1-08: 从 5 降为 4（2次重试最多3轮 generate，每轮 generate 后 finish_task）
+    generate_count = 0  # 硬限制 generate_briefing 调用次数
     for turn in range(max_turns):
         t_turn_start = time.perf_counter()
         print(f"[briefing_react] 第 {turn + 1} 轮思考...", flush=True)
@@ -598,13 +728,7 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                         tool_args["goal_text"] = goal_text
                     if "categories" not in tool_args:
                         tool_args["categories"] = categories
-                elif tool_name == "quality_check":
-                    if "briefing" not in tool_args:
-                        tool_args["briefing"] = briefing
-                    if "ranked_items" not in tool_args:
-                        tool_args["ranked_items"] = ranked_items
-                    if "goal_text" not in tool_args:
-                        tool_args["goal_text"] = goal_text
+                # P1-08: 移除 quality_check 工具分支（改为代码层自动评估）
 
                 t_tool_start = time.perf_counter()
                 try:
@@ -619,18 +743,79 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                 if tool_name == "generate_briefing":
                     generate_count += 1
                     briefing = result.get("briefing", {})
+                    briefing_result = result.get("briefing_result", {})
                     current_state["briefing"] = briefing
-                    current_state["briefing_result"] = result.get("briefing_result", {})
-                elif tool_name == "quality_check":
-                    brief_quality = result.get("brief_quality", 0.0)
-                    quality_detail = result.get("quality_detail", {})
+                    current_state["briefing_result"] = briefing_result
+
+                    # P1-08: 生成后自动执行质量评估（代码层直接调用，不经过 LLM 思考）
+                    current_state["ranked_items"] = ranked_items
+                    current_state["goal_text"] = goal_text
+                    quality_result = brief_quality_check_node(current_state)
+                    brief_quality = quality_result.get("brief_quality", 0.0)
                     current_state["brief_quality"] = brief_quality
-                    current_state["quality_detail"] = quality_detail
+                    current_state["quality_detail"] = quality_result.get("quality_detail", {})
+                    # 将 _cached_relevance 合并回 briefing_result 供后续重试复用
+                    updated_briefing_result = quality_result.get("briefing_result", {})
+                    current_state["briefing_result"] = updated_briefing_result
+
+                    # 判断质量是否达标
+                    if brief_quality >= 0.7:
+                        t_turn_total = time.perf_counter() - t_turn_start
+                        print(f"[briefing_react] 质量达标 ({brief_quality:.4f})，自动完成", flush=True)
+                        messages.append(message)
+                        messages.append({
+                            "role": "tool",
+                            "tool_call_id": tc.get("id", tool_name),
+                            "content": json.dumps(result, ensure_ascii=False, default=str),
+                        })
+                        t_agent_elapsed = time.perf_counter() - t_agent_start
+                        print(f"[briefing_react] ⏱️ 简报 Agent 总耗时: {t_agent_elapsed:.2f}s, "
+                              f"ReAct 轮数: {turn + 1}, generate 次数: {generate_count}, timing={timing}", flush=True)
+                        return {
+                            "briefing": briefing,
+                            "brief_quality": brief_quality,
+                            "quality_detail": current_state.get("quality_detail", {}),
+                            "briefing_result": updated_briefing_result,
+                            "briefing_summary": f"质量达标({brief_quality:.4f})，自动完成",
+                            "briefing_timing": timing,
+                        }
+
+                    # P1-08: 重试上限检查（max_retries，从 3 降为 2）
+                    if generate_count > max_retries:
+                        t_agent_elapsed = time.perf_counter() - t_agent_start
+                        print(f"[briefing_react] generate_briefing 已达 {generate_count} 次（上限 {max_retries}），"
+                              f"强制 finish（质量={brief_quality:.4f}）", flush=True)
+                        print(f"[briefing_react] ⏱️ 简报 Agent 总耗时: {t_agent_elapsed:.2f}s, "
+                              f"ReAct 轮数: {turn + 1}, timing={timing}", flush=True)
+                        return {
+                            "briefing": briefing,
+                            "brief_quality": brief_quality,
+                            "quality_detail": current_state.get("quality_detail", {}),
+                            "briefing_result": updated_briefing_result,
+                            "briefing_summary": f"已达最大重试次数({generate_count})，强制收敛",
+                            "briefing_timing": timing,
+                        }
+
+                    # 自动重试：注入质量反馈
+                    print(f"[briefing_react] 质量不达标 ({brief_quality:.4f})，自动重试 "
+                          f"({generate_count}/{max_retries})", flush=True)
+                    messages.append(message)
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": tc.get("id", tool_name),
+                        "content": json.dumps(result, ensure_ascii=False, default=str),
+                    })
+                    # 注入重试提示（包含质量反馈）
+                    retry_msg = (f"上次质量评分 {brief_quality:.4f} < 0.7，请重新生成简报。"
+                                 f"注意提高与用户目标「{goal_text}」的相关性。")
+                    messages.append({"role": "user", "content": retry_msg})
+                    continue
+
                 elif tool_name == "finish_task":
                     summary = result.get("summary", "")
                     t_turn_total = time.perf_counter() - t_turn_start
-                    print(f"[briefing_react] 简报完成: quality={brief_quality:.4f}, 本轮耗时={t_turn_total:.2f}s", flush=True)
-                    # 追加 finish_task 调用记录到 messages 历史（保持完整性，便于审计/重放）
+                    print(f"[briefing_react] 简报完成: quality={brief_quality:.4f}, "
+                          f"本轮耗时={t_turn_total:.2f}s", flush=True)
                     messages.append(message)
                     messages.append({
                         "role": "tool",
@@ -638,30 +823,18 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                         "content": json.dumps(result, ensure_ascii=False, default=str),
                     })
                     t_agent_elapsed = time.perf_counter() - t_agent_start
-                    print(f"[briefing_react] ⏱️ 简报 Agent 总耗时: {t_agent_elapsed:.2f}s, ReAct 轮数: {turn + 1}, timing={timing}", flush=True)
+                    print(f"[briefing_react] ⏱️ 简报 Agent 总耗时: {t_agent_elapsed:.2f}s, "
+                          f"ReAct 轮数: {turn + 1}, timing={timing}", flush=True)
                     return {
                         "briefing": briefing,
                         "brief_quality": brief_quality,
-                        "quality_detail": quality_detail,
+                        "quality_detail": current_state.get("quality_detail", {}),
                         "briefing_result": current_state.get("briefing_result", {}),
                         "briefing_summary": summary,
                         "briefing_timing": timing,
                     }
 
-                # P1-2.3: 代码层硬限制 generate_briefing 调用次数，防 LLM 不守 prompt 无限重试
-                if generate_count >= 3:
-                    t_agent_elapsed = time.perf_counter() - t_agent_start
-                    print(f"[briefing_react] generate_briefing 已达 {generate_count} 次，强制 finish（质量={brief_quality:.4f}）", flush=True)
-                    print(f"[briefing_react] ⏱️ 简报 Agent 总耗时: {t_agent_elapsed:.2f}s, ReAct 轮数: {turn + 1}, timing={timing}", flush=True)
-                    return {
-                        "briefing": briefing,
-                        "brief_quality": brief_quality,
-                        "quality_detail": quality_detail,
-                        "briefing_result": current_state.get("briefing_result", {}),
-                        "briefing_summary": f"已达最大重试次数({generate_count})，强制收敛",
-                        "briefing_timing": timing,
-                    }
-
+                # 其他工具（兜底）
                 messages.append(message)
                 messages.append({
                     "role": "tool",

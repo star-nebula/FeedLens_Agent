@@ -1,11 +1,58 @@
 # FeedLens Agentic 升级 Changelog
 
-## v2.1.0 — 向量预过滤跨批次去重（2026-06-23 规划中）
+## v2.1.0 — 减少 LLM 冗余调用：向量预过滤 + 简报管线深度优化（2026-06-24 规划中）
 
-- 新增优化规划文档 `docs/Change/01_性能优化/07_向量预过滤跨批次去重.md`
-- 方案：在 Collection→Ranking 之间插入 ChromaDB 向量预过滤，拦截历史重复条目
-- 预期效果：进入 Ranking Agent 的条目减少 70%+，总管线耗时缩短 60%
-- 涉及文件：`agents/main_agent.py`, `models/vector_store.py`, `config/config.yaml`
+> **统一目标**：通过硬编码/规则化手段减少不必要的 LLM API 调用，把 LLM 从「判断」角色解放为「创造」角色。
+
+### 子方案 A：向量预过滤跨批次去重（07）— Collection Agent 内部步骤
+
+- 文档：`docs/Change/01_性能优化/07_向量预过滤跨批次去重.md`
+- 方案：在 Collection Agent 内部，`fetch_rss`/`search_web` 返回条目后通过 ChromaDB 向量查重拦截历史重复条目，**Planner 无需感知**
+- 触发条件：`config.prefilter.enabled=true`（feature flag 可控回退）
+- 预期效果：进入 Ranking Agent 的条目减少 70%+，rank_items LLM token 消耗 -73%
+- 涉及文件：`agents/collection_agent.py`, `agents/main_agent.py`, `models/vector_store.py`, `config/config.yaml`
+- 核心改动：
+  1. `_prefilter_against_history()` — Collection Agent 内部函数，查 ChromaDB 拦截相似度 ≥ 0.92 的条目
+  2. `VectorStore.search_by_embedding()` — 按原始向量查询（新增方法）
+  3. `VectorStore.upsert_items()` — 幂等写入（新增方法）
+  4. `update_memory_node` — 追加 feed_items 向量写入 ChromaDB
+- 架构优势：预过滤是 Collection Agent 的内部质量保证，Planner 保持自主编排能力
+
+### 子方案 B：简报管线深度优化（08）— 生成前预检 + 消除 ReAct + 降低重试
+
+- 文档：`docs/Change/01_性能优化/08_briefing生成与质量检查合并.md`
+- 架构文档：`docs/Change/02_架构演进规划/05_简报管线深度优化_生成前预筛与合并调用.md`
+- 方案：取消不可靠的 LLM 自评，通过「生成前硬编码预检 + 分离 coherence + quality 仅评 relevance + 降低重试上限」减少无效 LLM 调用
+- 预期效果：Briefing ReAct 思考 -100%，quality LLM 仅首次调用，重试上限 3→2
+- 涉及文件：`agents/briefing_agent.py`, `tools/tool_registry.py`, `config/config.yaml`
+- 核心改动：
+  1. **生成前硬编码预检**：`_preflight_for_briefing()` 过滤低质条目 + URL 去重合并 + 时间跨度/条目数量警告
+  2. **分离 coherence 到生成前**：规则检测（URL/时间/重要性）移到预检阶段，quality_check 仅基于 LLM 矛盾计算 coherence
+  3. **quality LLM 缓存复用**：relevance 仅首次调用，后续重试复用缓存
+  4. **ReAct 思考消除**：确定性"生成→自动评估→(重试)→完成"流程由代码层直接控制
+  5. **重试上限降低**：3→2 次（因可控扣分因素已消除）
+- 架构原则：**LLM 只做「创造」不做「判断」**，拒绝 LLM 自评（存在利益冲突）
+
+### 两个子方案的关系
+
+```
+当前管线:
+  Collection (0 LLM) → Ranking (dedup LLM + rank LLM) → Briefing (ReAct思考 + generate + quality)
+
+子方案 A (向量预过滤):
+  Collection [内部预过滤] → Ranking (条目-73%) → Briefing (不变)
+  节省: rank_items token -73%
+
+子方案 B (简报管线优化):
+  Collection → Ranking (不变) → Briefing (预检+消除ReAct+quality缓存, -33~50% LLM)
+  节省: Briefing API -33~50%, ReAct思考 -100%
+
+A+B 叠加:
+  Collection [内部预过滤] → Ranking (条目-73%) → Briefing (预检+消除ReAct+quality缓存)
+  总 API: ≤6-8 次，总耗时 ≤2 分钟
+```
+
+**实施建议**：先 A 后 B。A 是 Collection Agent 内部变更，B 是 Briefing Agent 内部重构。两者独立、可分别回退。
 
 ## v2.0.0 — LLM 动态路由 + 阶段内 ReAct（2026-06-22）
 
@@ -123,12 +170,14 @@
 | 2.6 | thinking_mode 关闭 + tool_choice | `llm_provider.py`, 三个 Agent | 修复 V4 function calling 不稳定 | [`06_thinking_mode关闭与tool_choice.md`](./01_性能优化/06_thinking_mode关闭与tool_choice.md) |
 | 2.7 | expand_threshold 漏传修复 | `ranking_agent.py` | 修复排序始终 0 条 | 详见 [`bugfix.md#bug-001`](./bugfix.md) |
 | 2.8 | collection pipeline 固定化 | `collection_agent.py`, `config.yaml` | 采集 LLM 调用 -100%，耗时 -60~70% | [`05_collection_pipeline固定化.md`](./01_性能优化/05_collection_pipeline固定化.md) |
+| 2.9 | 向量预过滤跨批次去重 | `collection_agent.py`, `main_agent.py`, `vector_store.py`, `config.yaml` | 进入 Ranking 条目 -70%+，rank_items token -73%（Collection 内部步骤，Planner 无感知） | [`07_向量预过滤跨批次去重.md`](./01_性能优化/07_向量预过滤跨批次去重.md) |
+| 2.10 | briefing 管线深度优化 | `briefing_agent.py`, `tool_registry.py`, `config.yaml` | ReAct 思考 -100%，quality 仅首次调用，重试 3→2 | [`08_briefing生成与质量检查合并.md`](./01_性能优化/08_briefing生成与质量检查合并.md) |
 
 **整体指标变化**：
 
-| 指标 | 优化前 | 优化后 |
-|------|--------|--------|
-| 单次执行耗时 | ~8分36秒 | ≤3分钟 |
-| LLM API 调用次数 | ~35+次 | ≤12次 |
-| API 浪费占比 | ~65% | ≤20% |
-| 最终质量 | 0.746 | ≥0.7（保持） |
+| 指标 | 优化前 | 当前（v2.0） | v2.1 目标（A+B叠加） |
+|------|--------|-------------|---------------------|
+| 单次执行耗时 | ~8分36秒 | ≤3分钟 | ≤2分钟 |
+| LLM API 调用次数 | ~35+次 | ≤12次 | ≤6-8次 |
+| API 浪费占比 | ~65% | ≤20% | ≤10% |
+| 最终质量 | 0.746 | ≥0.7（保持） | ≥0.7（保持） |

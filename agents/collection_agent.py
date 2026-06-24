@@ -141,6 +141,9 @@ def run_collection_agent(state: FeedLensState) -> dict:
     collected_items = state.get("collected_items", [])
     search_supplemented = False
     collection_summary = ""
+    prefilter_enabled = load_config().get("prefilter", {}).get("enabled", True)
+    prefilter_threshold = load_config().get("prefilter", {}).get("similarity_threshold", 0.92)
+    prefilter_top_k = load_config().get("prefilter", {}).get("query_top_k", 1)
 
     max_turns = 5
     for turn in range(max_turns):
@@ -194,11 +197,25 @@ def run_collection_agent(state: FeedLensState) -> dict:
                 if tool_name == "fetch_rss":
                     items = result.get("items", [])
                     valid = [it for it in items if "error" not in it]
+                    # 🆕 向量预过滤：拦截历史重复条目
+                    if valid and prefilter_enabled:
+                        valid, _ = _prefilter_against_history(
+                            valid,
+                            threshold=prefilter_threshold,
+                            top_k=prefilter_top_k,
+                        )
                     collected_items.extend(valid)
                 elif tool_name == "search_web":
                     items = result.get("items", [])
                     if items:
                         search_supplemented = True
+                    # 🆕 向量预过滤：拦截历史重复条目
+                    if items and prefilter_enabled:
+                        items, _ = _prefilter_against_history(
+                            items,
+                            threshold=prefilter_threshold,
+                            top_k=prefilter_top_k,
+                        )
                     collected_items.extend(items)
                 elif tool_name == "enrich_metadata":
                     enriched = result.get("items", [])
@@ -257,6 +274,95 @@ def run_collection_agent(state: FeedLensState) -> dict:
 
 
 # ============================================================
+# 向量预过滤 — 跨批次去重（Collection Agent 内部）
+# ============================================================
+
+def _prefilter_against_history(
+    items: list,
+    threshold: float = 0.92,
+    top_k: int = 1,
+) -> tuple:
+    """向量预过滤：查询 ChromaDB 历史条目，丢弃明显重复项（无 LLM）。
+
+    Collection Agent 内部函数，对上层透明。
+
+    工作原理：
+      1. 对每个条目用 bge-small 编码 title+summary
+      2. 在 ChromaDB feed_items 集合中查最相似的历史条目
+      3. 余弦相似度 >= threshold → 直接丢弃（历史已有）
+      4. 余弦相似度 < threshold → 保留（新数据）
+
+    feed_items 集合使用 cosine 距离度量，所以 1 - distance = cosine_similarity。
+
+    降级策略：任何异常都透传全部条目，不阻塞管线。
+
+    Args:
+        items: 待过滤的条目列表
+        threshold: 余弦相似度阈值，>= 此值视为重复（默认 0.92）
+        top_k: 每次查询返回的最相似结果数（默认 1）
+
+    Returns:
+        (kept_items, discarded_items): 保留的条目和丢弃的条目
+    """
+    if not items:
+        return items, []
+
+    try:
+        from models.vector_store import VectorStore
+        from utils.embedding import EmbeddingModel
+
+        vs = VectorStore(persist_dir="data/chroma")
+        vs.init_collections()
+        em = EmbeddingModel()
+
+        # 检查 feed_items 集合是否为空（冷启动场景）
+        feed_col = vs.get_collection("feed_items")
+        if feed_col.count() == 0:
+            print("[collection_prefilter] ChromaDB feed_items 为空（冷启动），透传全部条目", flush=True)
+            return items, []
+
+        kept, discarded = [], []
+
+        for item in items:
+            title = item.get("title", "")
+            summary = item.get("summary", "")
+            text = f"{title} {summary}".strip()
+            if not text:
+                kept.append(item)
+                continue
+
+            try:
+                vec = em.encode_single(text)
+                results = vs.search_by_embedding(
+                    vec.tolist() if hasattr(vec, 'tolist') else list(vec),
+                    n_results=top_k,
+                    collection="feed_items",
+                )
+                distances = results.get("distances", [[]])
+                if distances and distances[0] and len(distances[0]) > 0:
+                    # feed_items 使用 cosine 距离度量，1 - distance = cosine_similarity
+                    cos_sim = 1.0 - distances[0][0]
+                    if cos_sim >= threshold:
+                        discarded.append(item)
+                        continue
+                kept.append(item)
+            except Exception:
+                # 单条查询异常不阻塞整体
+                kept.append(item)
+
+        drop_rate = len(discarded) / len(items) * 100 if items else 0
+        print(
+            f"[collection_prefilter] {len(items)}→{len(kept)}条 "
+            f"(丢弃{len(discarded)}条, {drop_rate:.0f}%历史重复)",
+            flush=True,
+        )
+        return kept, discarded
+    except Exception as e:
+        print(f"[collection_prefilter] 降级透传全部{len(items)}条: {e}", flush=True)
+        return items, []
+
+
+# ============================================================
 # Pipeline 采集函数 — 固定流水线，无 LLM 参与
 # ============================================================
 
@@ -287,7 +393,18 @@ def run_collection_pipeline(state: FeedLensState) -> dict:
         rss_result = tool_registry.dispatch("fetch_rss", {"sources": sources})
         rss_items = rss_result.get("items", [])
         valid_items = [it for it in rss_items if "error" not in it]
-        collected_items.extend(valid_items)
+        # 🆕 向量预过滤：拦截历史重复条目
+        if valid_items:
+            prefilter_cfg = config.get("prefilter", {})
+            if prefilter_cfg.get("enabled", True):
+                new_items, _ = _prefilter_against_history(
+                    valid_items,
+                    threshold=prefilter_cfg.get("similarity_threshold", 0.92),
+                    top_k=prefilter_cfg.get("query_top_k", 1),
+                )
+                collected_items.extend(new_items)
+            else:
+                collected_items.extend(valid_items)
         print(f"[collection_pipeline] fetch_rss 完成: {len(collected_items)} 条有效", flush=True)
     except Exception as e:
         print(f"[collection_pipeline] fetch_rss 失败: {e}", flush=True)
@@ -299,9 +416,20 @@ def run_collection_pipeline(state: FeedLensState) -> dict:
             search_result = tool_registry.dispatch("search_web", {"query": query})
             search_items = search_result.get("items", [])
             if search_items:
-                search_supplemented = True
-                collected_items.extend(search_items)
-                print(f"[collection_pipeline] search_web 完成: +{len(search_items)} 条", flush=True)
+                # 🆕 向量预过滤：拦截历史重复条目
+                prefilter_cfg = config.get("prefilter", {})
+                if prefilter_cfg.get("enabled", True):
+                    new_search_items, _ = _prefilter_against_history(
+                        search_items,
+                        threshold=prefilter_cfg.get("similarity_threshold", 0.92),
+                        top_k=prefilter_cfg.get("query_top_k", 1),
+                    )
+                else:
+                    new_search_items = search_items
+                if new_search_items:
+                    search_supplemented = True
+                    collected_items.extend(new_search_items)
+                    print(f"[collection_pipeline] search_web 完成: +{len(new_search_items)} 条", flush=True)
         except Exception as e:
             print(f"[collection_pipeline] search_web 失败: {e}", flush=True)
 

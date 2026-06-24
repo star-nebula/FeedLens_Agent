@@ -207,6 +207,96 @@ def start_daily_scheduler(callback: Callable):
 
 
 # ============================================================
+# 定时清理 ChromaDB 过期向量（对齐 data.retention_days）
+# ============================================================
+
+def cleanup_expired_vectors(
+    chroma_path: str = "data/chroma",
+    retention_days: int = 30,
+    collection: str = "feed_items",
+) -> int:
+    """清理 ChromaDB 中超过 retention_days 天的向量。
+
+    对齐 config.data.retention_days 和 prefilter.retention_days。
+    在 update_memory_node 写入向量时记录 created_at 时间戳，
+    此函数根据 metadatas.created_at 删除过期条目。
+
+    Args:
+        chroma_path: ChromaDB 持久化目录路径
+        retention_days: 保留天数
+        collection: 要清理的集合名
+
+    Returns:
+        删除的条目数
+    """
+    from datetime import datetime, timedelta
+
+    cutoff = (datetime.now() - timedelta(days=retention_days)).isoformat()
+
+    try:
+        from models.vector_store import VectorStore
+        vs = VectorStore(persist_dir=chroma_path)
+        vs.init_collections()
+        col = vs.get_collection(collection)
+
+        total = col.count()
+        if total == 0:
+            print(f"[cleanup_vectors] {collection} 集合为空，跳过清理", flush=True)
+            return 0
+
+        # 获取所有条目及其 metadata
+        results = col.get()
+        ids_to_delete = []
+        for id_, meta in zip(results.get("ids", []), results.get("metadatas", [])):
+            created_at = meta.get("created_at", "") if meta else ""
+            if created_at and created_at < cutoff:
+                ids_to_delete.append(id_)
+
+        if ids_to_delete:
+            col.delete(ids=ids_to_delete)
+            print(
+                f"[cleanup_vectors] {collection}: 删除 {len(ids_to_delete)} 条过期向量 "
+                f"(保留 {total - len(ids_to_delete)} 条, cutoff={cutoff})",
+                flush=True,
+            )
+        else:
+            print(
+                f"[cleanup_vectors] {collection}: 无过期向量 ({total} 条均未过期, cutoff={cutoff})",
+                flush=True,
+            )
+        return len(ids_to_delete)
+    except Exception as e:
+        print(f"[cleanup_vectors] 清理失败: {e}", flush=True)
+        return 0
+
+
+def schedule_vector_cleanup(
+    scheduler: BackgroundScheduler = None,
+    chroma_path: str = "data/chroma",
+    retention_days: int = 30,
+):
+    """注册定时清理任务到调度器（每天凌晨 3 点执行）。
+
+    Args:
+        scheduler: APScheduler BackgroundScheduler 实例（如未提供则创建新实例）
+        chroma_path: ChromaDB 持久化目录
+        retention_days: 保留天数
+    """
+    if scheduler is None:
+        scheduler = BackgroundScheduler(timezone="Asia/Shanghai")
+
+    scheduler.add_job(
+        lambda: cleanup_expired_vectors(chroma_path, retention_days),
+        trigger=CronTrigger(hour=3, minute=0, timezone="Asia/Shanghai"),
+        id="cleanup_expired_vectors",
+        name="清理过期向量",
+        replace_existing=True,
+    )
+    print(f"[scheduler] 向量清理任务已注册: 每天 03:00 (保留 {retention_days} 天)", flush=True)
+    return scheduler
+
+
+# ============================================================
 # CLI 测试入口
 # ============================================================
 

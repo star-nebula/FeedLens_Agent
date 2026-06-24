@@ -60,24 +60,28 @@ class VectorStore:
         self._collections: dict[str, chromadb.Collection] = {}
 
     def init_collections(self, force_recreate: bool = False):
-        """初始化 3 个集合（幂等）。"""
+        """初始化 3 个集合（幂等）。
+
+        feed_items 集合使用 cosine 距离度量，确保 1 - distance 可直接得到余弦相似度。
+        """
         kwargs = {}
         if self.chroma_embedding_fn is not None:
             kwargs["embedding_function"] = self.chroma_embedding_fn
 
+        # 每个集合的 metadata，feed_items 需要指定 hnsw:space=cosine
         collections = [
-            (self.COLLECTION_FEED_ITEMS, "条目向量：去重 + 相似度检索"),
-            (self.COLLECTION_USER_PREF, "用户偏好向量：v_like / v_dislike 正负分离"),
-            (self.COLLECTION_DOMAIN_KNOWLEDGE, "语义记忆种子数据（MVP 手动维护）"),
+            (self.COLLECTION_FEED_ITEMS, {"description": "条目向量：去重 + 相似度检索", "hnsw:space": "cosine"}),
+            (self.COLLECTION_USER_PREF, {"description": "用户偏好向量：v_like / v_dislike 正负分离"}),
+            (self.COLLECTION_DOMAIN_KNOWLEDGE, {"description": "语义记忆种子数据（MVP 手动维护）"}),
         ]
 
-        for name, description in collections:
+        for name, metadata in collections:
             try:
                 if force_recreate:
                     self.client.delete_collection(name)
                 self._collections[name] = self.client.get_or_create_collection(
                     name=name,
-                    metadata={"description": description},
+                    metadata=metadata,
                     **kwargs,
                 )
             except ValueError as e:
@@ -85,7 +89,7 @@ class VectorStore:
                     self.client.delete_collection(name)
                     self._collections[name] = self.client.create_collection(
                         name=name,
-                        metadata={"description": description},
+                        metadata=metadata,
                         **kwargs,
                     )
                 else:
@@ -127,6 +131,43 @@ class VectorStore:
             return col.query(query_embeddings=[query_embedding], n_results=n_results)
         else:
             return col.query(query_texts=[query_text], n_results=n_results)
+
+    def search_by_embedding(
+        self,
+        query_embedding: list[float],
+        n_results: int = 5,
+        collection: str = COLLECTION_FEED_ITEMS,
+    ) -> dict:
+        """按原始 embedding 向量查询（不经过 ChromaDB 内置 embedding_fn）。
+
+        用于预过滤场景：先用 bge-small 生成向量，再用此方法查 ChromaDB。
+        feed_items 集合使用 cosine 距离度量，distances 中的值即为余弦距离，
+        1 - distance 可直接得到余弦相似度。
+
+        Returns:
+            ChromaDB query result dict，含 ids, distances, metadatas, documents 等字段。
+        """
+        col = self.get_collection(collection)
+        return col.query(query_embeddings=[query_embedding], n_results=n_results)
+
+    def upsert_items(
+        self,
+        collection: str,
+        ids: list[str],
+        documents: list[str],
+        metadatas: list[dict],
+        embeddings: Optional[list[list[float]]] = None,
+    ):
+        """幂等写入条目向量（upsert 避免重复 ID 报错）。
+
+        用于 update_memory_node：已存在的条目 ID 静默更新，新条目新增。
+        """
+        col = self.get_collection(collection)
+        if embeddings is None and self.embedding_fn is not None:
+            embeddings = self.embedding_fn(documents)
+            if hasattr(embeddings, 'tolist'):
+                embeddings = embeddings.tolist()
+        col.upsert(ids=ids, documents=documents, metadatas=metadatas, embeddings=embeddings)
 
     def get_by_ids(self, ids: list[str], collection: str = COLLECTION_FEED_ITEMS) -> dict:
         """按 ID 批量获取。"""

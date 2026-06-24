@@ -505,7 +505,7 @@ TOOLS = [
             "required": ["briefing", "ranked_items"],
         },
         "fn": _execute_quality_check,
-        "phase": "briefing",
+        "phase": "briefing_legacy",  # P1-08: 不再暴露给 Briefing Agent LLM，改为代码层直接调用
     },
     # ---- 推送 ----
     {

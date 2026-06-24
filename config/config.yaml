@@ -47,6 +47,8 @@ ranking:
   half_life_hours: 24          # 时间衰减半衰期
   prescreen_hours: 72          # P0-2.2: 预筛时间窗口（小时，默认 72=3天）
   source_diversity_bonus: 0    # 来源多样性加分（P0=0, P1=0.05）
+  briefing_prescreen_min_score: 0.15  # P1-08: 简报预筛最低分数
+  briefing_max_retries: 2             # P1-08: 简报最大重试次数（从3降为2）
 
 # --- 反馈系统 ---
 feedback:
@@ -91,3 +93,11 @@ data:
   min_items_for_brief: 3       # 生成简报的最低条目数
   db_path: data/feedlens.db    # SQLite 数据库路径
   chroma_path: data/chroma     # ChromaDB 持久化路径
+
+# --- 向量预过滤（跨批次去重）---
+prefilter:
+  enabled: true                # 是否启用跨批次向量预过滤
+  chroma_collection: feed_items  # ChromaDB 集合名
+  similarity_threshold: 0.92   # 余弦相似度阈值（>= 此值直接丢弃）
+  query_top_k: 1               # 每次查询返回的最相似结果数
+  retention_days: 30           # 向量保留天数（对齐 data.retention_days）
