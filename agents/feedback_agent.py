@@ -250,8 +250,11 @@ def _get_preference_vector(vs: VectorStore, user_id: int, pref_type: str) -> lis
             ids=[f"user_{user_id}_{pref_type}"],
             include=["embeddings"],
         )
-        embeddings = result.get("embeddings") or []
-        if embeddings and len(embeddings) > 0 and embeddings[0]:
+        embeddings = result.get("embeddings")
+        # 🔧 安全处理：ChromaDB 返回的 embeddings 可能是 numpy array，
+        # 空数组的布尔判断会抛出 ambiguous truth value 错误。
+        if (embeddings is not None and hasattr(embeddings, '__len__') and len(embeddings) > 0
+                and embeddings[0] is not None and hasattr(embeddings[0], '__len__') and len(embeddings[0]) > 0):
             emb = embeddings[0]
             # 维度检查：ChromaDB 中旧数据可能为 512 维，当前模型为 384 维
             if len(emb) == expected_dim:

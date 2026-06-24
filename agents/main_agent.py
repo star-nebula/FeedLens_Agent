@@ -831,14 +831,14 @@ def push_notification_node(state: FeedLensState) -> dict:
 
     print(f"[push_notification] 开始推送: user_id={user_id}, immediate={push_immediate}", flush=True)
 
-    # 构建推送内容（适配 briefing_agent 的 categories 结构）
+    # 构建推送内容
     if briefing:
         # 优先使用 Markdown 渲染版本
         markdown_content = briefing.get("_markdown", "")
         push_content = {
             "title": briefing.get("title", "FeedLens 每日简报"),
             "summary": briefing.get("summary", ""),
-            "categories": briefing.get("categories", []),
+            "items": briefing.get("items", []),
             "markdown": markdown_content,
             "generated_at": datetime.now().isoformat(),
         }
@@ -1039,13 +1039,12 @@ def update_memory_node(state: FeedLensState) -> dict:
                     if item_id_str:
                         id_to_dedup[item_id_str] = dedup_id
 
-                # 替换 briefing_data 中 categories[].items[].id 为 dedup_id
+                # 替换 briefing_data 中 items[].id 为 dedup_id
                 # 这样 content_json 中的 ID 就能和 briefing_items.item_id 对应
-                for cat_group in briefing_data.get("categories", []):
-                    for entry in cat_group.get("items", []):
-                        old_id = str(entry.get("id", ""))
-                        if old_id in id_to_dedup:
-                            entry["id"] = id_to_dedup[old_id]
+                for entry in briefing_data.get("items", []):
+                    old_id = str(entry.get("id", ""))
+                    if old_id in id_to_dedup:
+                        entry["id"] = id_to_dedup[old_id]
 
                 # 序列化修正后的 JSON
                 content_json = json.dumps(briefing_data, ensure_ascii=False)
@@ -1272,11 +1271,7 @@ def _default_reflect_check(ctx: dict) -> dict:
     # 4. 矛盾检查（使用 briefing_agent 的 _check_contradiction）
     if briefing:
         from agents.briefing_agent import _check_contradiction
-        categories = briefing.get("categories", [])
-        all_brief_items = []
-        for cat in categories:
-            for item in cat.get("items", []):
-                all_brief_items.append(item)
+        all_brief_items = briefing.get("items", [])
         for i_idx in range(len(all_brief_items)):
             for j_idx in range(i_idx + 1, len(all_brief_items)):
                 if _check_contradiction(all_brief_items[i_idx], all_brief_items[j_idx]):

@@ -338,8 +338,11 @@ def _prefilter_against_history(
                     n_results=top_k,
                     collection="feed_items",
                 )
-                distances = results.get("distances", [[]])
-                if distances and distances[0] and len(distances[0]) > 0:
+                distances = results.get("distances")
+                # 🔧 安全处理：ChromaDB 返回的 distances 可能是 numpy array，
+                # 空数组的布尔判断会抛出 ambiguous truth value 错误。
+                if (distances is not None and hasattr(distances, '__len__') and len(distances) > 0
+                        and distances[0] is not None and hasattr(distances[0], '__len__') and len(distances[0]) > 0):
                     # feed_items 使用 cosine 距离度量，1 - distance = cosine_similarity
                     cos_sim = 1.0 - distances[0][0]
                     if cos_sim >= threshold:

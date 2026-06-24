@@ -279,7 +279,10 @@ def rank_items_node(state: FeedLensState) -> dict:
         item_emb = item.get("embedding", [])
         item_id = item.get("id", "")
         similarity_score = 0.0
-        if item_emb and goal_embedding and len(item_emb) == len(goal_embedding):
+        # 🔧 安全处理：embedding 可能是 numpy array，空数组的布尔判断会抛异常
+        if (item_emb is not None and hasattr(item_emb, '__len__') and len(item_emb) > 0
+                and goal_embedding is not None and hasattr(goal_embedding, '__len__') and len(goal_embedding) > 0
+                and len(item_emb) == len(goal_embedding)):
             dot = sum(a * b for a, b in zip(item_emb, goal_embedding))
             mag1 = (sum(a * a for a in item_emb)) ** 0.5
             mag2 = (sum(g * g for g in goal_embedding)) ** 0.5

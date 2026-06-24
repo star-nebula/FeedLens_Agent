@@ -132,21 +132,45 @@ class VectorStore:
 
         try:
             col = self.client.get_collection(collection_name)
-            result = col.get(limit=1, include=["embeddings"])
-            emb_list = result.get("embeddings") or []
-            if emb_list and len(emb_list) > 0:
-                emb = emb_list[0]
-                if len(emb) != expected_dim:
-                    print(f"[VectorStore] 维度不匹配: {collection_name} 现有 {len(emb)} 维, "
-                          f"模型 {expected_dim} 维，自动重建", flush=True)
-                    self.client.delete_collection(collection_name)
-        except Exception as e:
-            # 如果 get 失败（如 embedding function 冲突），也需要重建
-            print(f"[VectorStore] 检测 {collection_name} 维度失败: {e}，尝试重建", flush=True)
+            # 🔧 空集合快速返回：count()==0 时无需维度检测，且避免后续
+            # col.get() 返回空 numpy array 导致 ambiguous truth value 错误。
             try:
-                self.client.delete_collection(collection_name)
-            except Exception:
-                pass
+                cnt = col.count()
+            except Exception as count_err:
+                # ChromaDB 内部错误（如 WAL 损坏、backfill 失败），
+                # 此时集合数据已不可靠，强制删除重建。
+                print(f"[VectorStore] count() 失败: {count_err}，强制重建 {collection_name}", flush=True)
+                self._force_recreate_collection(collection_name)
+                return
+            if cnt == 0:
+                return
+            result = col.get(limit=1, include=["embeddings"])
+            emb_list = result.get("embeddings")
+            # 🔧 安全处理：ChromaDB 返回的 embeddings 可能是 numpy array，
+            # 空 numpy array 的布尔判断会抛出 "ambiguous truth value" 错误。
+            # 使用显式检查替代隐式布尔转换。
+            if emb_list is not None and hasattr(emb_list, '__len__') and len(emb_list) > 0:
+                emb = emb_list[0]
+                if emb is not None and hasattr(emb, '__len__') and len(emb) > 0:
+                    if len(emb) != expected_dim:
+                        print(f"[VectorStore] 维度不匹配: {collection_name} 现有 {len(emb)} 维, "
+                              f"模型 {expected_dim} 维，自动重建", flush=True)
+                        self._force_recreate_collection(collection_name)
+        except Exception as e:
+            # ChromaDB 底层异常（如 SQLite 文件损坏、WAL 损坏等），
+            # 此时集合数据已不可靠，强制删除重建。
+            print(f"[VectorStore] 检测 {collection_name} 维度失败: {e}，强制重建", flush=True)
+            self._force_recreate_collection(collection_name)
+
+    def _force_recreate_collection(self, collection_name: str):
+        """强制删除并重建集合（处理 ChromaDB 底层损坏）。"""
+        try:
+            self.client.delete_collection(collection_name)
+        except Exception as del_err:
+            # delete_collection 也失败（如 SQLite 文件级损坏），
+            # 此时只能手动清理持久化目录。
+            print(f"[VectorStore] ⚠️ delete_collection 也失败: {del_err}", flush=True)
+            print(f"[VectorStore] ⚠️ 请手动删除 data/chroma/ 目录后重启应用", flush=True)
 
     def get_collection(self, name: str) -> chromadb.Collection:
         """获取已初始化的集合。"""

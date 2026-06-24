@@ -38,38 +38,26 @@ BRIEFING_SCHEMA = {
     "type": "object",
     "properties": {
         "title": {"type": "string", "description": "简报标题"},
-        "summary": {"type": "string", "description": "简报摘要，50字以内"},
-        "categories": {
+        "summary": {"type": "string", "description": "简报摘要，200字以内"},
+        "items": {
             "type": "array",
             "items": {
                 "type": "object",
                 "properties": {
-                    "name": {"type": "string"},
-                    "items": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "id": {"type": "string"},
-                                "title": {"type": "string"},
-                                "summary": {"type": "string"},
-                                "source": {"type": "string"},
-                                "published_at": {"type": "string"},
-                                "importance": {"type": "number"},
-                                "similar_count": {"type": "integer"},
-                                "url": {"type": "string", "description": "条目链接"},
-                            },
-                            "required": ["id", "title"],
-                        },
-                    },
-                    "count": {"type": "integer"},
+                    "id": {"type": "string"},
+                    "title": {"type": "string"},
+                    "summary": {"type": "string"},
+                    "source": {"type": "string"},
+                    "published_at": {"type": "string"},
+                    "importance": {"type": "number"},
+                    "url": {"type": "string", "description": "条目链接"},
                 },
-                "required": ["name", "items"],
+                "required": ["id", "title"],
             },
         },
         "generated_at": {"type": "string"},
     },
-    "required": ["title", "summary", "categories"],
+    "required": ["title", "summary", "items"],
 }
 
 
@@ -100,32 +88,20 @@ def _group_by_category(items: List[Dict], categories: List[str]) -> Dict[str, Li
     return grouped
 
 
-def _build_briefing_prompt(grouped: Dict[str, List[Dict]], goal_text: str, categories: List[str]) -> str:
+def _build_briefing_prompt(items: List[Dict], goal_text: str) -> str:
     items_text = []
-    for cat in categories:
-        cat_items = grouped.get(cat, [])
-        if not cat_items:
-            continue
-        items_text.append(f"\n## {cat}（共{len(cat_items)}条）")
-        # 主条目（第1条）展示完整信息
-        main_item = cat_items[0]
-        raw_summary = main_item.get('summary', '') or ''
+    for i, item in enumerate(items):
+        raw_summary = item.get('summary', '') or ''
         clean_summary = _strip_html(raw_summary)[:500]
         items_text.append(
-            f"★ 主条目 [{main_item.get('id', 'item_0')}] {main_item.get('title', '')}\n"
+            f"[{item.get('id', f'item_{i}')}] {item.get('title', '')}\n"
             f"  摘要: {clean_summary}\n"
-            f"  来源: {main_item.get('source', 'unknown')} | "
-            f"  时间: {main_item.get('published_at', '')} | "
-            f"  链接: {main_item.get('url', '')} | "
-            f"重要性: {_format_importance(main_item.get('importance', 0.5))}"
+            f"  来源: {item.get('source', item.get('source_name', 'unknown'))} | "
+            f"  时间: {item.get('published_at', '')} | "
+            f"  链接: {item.get('url', '')} | "
+            f"  重要性: {_format_importance(item.get('importance', 0.5))}"
         )
-        # 其余条目作为类似报道，保留 id + title + url
-        for i, item in enumerate(cat_items[1:]):
-            items_text.append(
-                f"  - 类似报道 [{item.get('id', f'item_{i+1}')}] "
-                f"{item.get('title', '')} | url: {item.get('url', '')}"
-            )
-    items_block = "\n".join(items_text) if items_text else "（无条目）"
+    items_block = "\n\n".join(items_text) if items_text else "（无条目）"
     prompt = f"""你是一个简报生成助手。根据以下信息生成一份结构化 JSON 简报。
 
 ## 用户目标
@@ -136,17 +112,11 @@ def _build_briefing_prompt(grouped: Dict[str, List[Dict]], goal_text: str, categ
 
 ## 输出要求
 
-## 输出风格: detailed
-主条目保留完整信息，类似报道保留 id + title + url
-
 1. title：简报标题，简洁有力
 2. summary：简报摘要，100字以内
-3. categories：按以下分类组织，每个分类选1条最重要条目作为主条目（★标记的），其余全部作为类似报道
-4. 主条目保留完整信息（id, title, summary, source, published_at, importance, url）
-5. 类似报道保留 id, title, url，不可遗漏（summary 可以为空字符串）
-6. 每个分类的 count 字段填写该类条目总数（主条目 + 类似报道），必须等于输入条目数
-7. generated_at：当前时间，ISO 格式
-8. ⚠️ 关键：必须将输入的所有条目都包含在输出中，不允许丢弃任何条目
+3. items：将所有条目包含在 items 数组中，每条保留完整信息（id, title, summary, source, published_at, importance, url）
+4. 条目数量 = {len(items)}，不允许丢弃任何条目
+5. generated_at：当前时间，ISO 格式
 
 ## JSON Schema
 {json.dumps(BRIEFING_SCHEMA, ensure_ascii=False, indent=2)}
@@ -185,34 +155,33 @@ def _strip_html(text: str) -> str:
 
 
 def _backfill_briefing_items(briefing: Dict[str, Any], item_index: Dict[str, Dict[str, Any]]) -> None:
-    for cat_group in briefing.get("categories", []):
-        for item in cat_group.get("items", []):
-            item_id = item.get("id", "")
-            orig = item_index.get(item_id)
-            if not orig:
-                continue
-            for field in _BACKFILL_FIELDS:
-                # ranking_agent 输出字段是 _score，映射到 final_score
-                orig_field = "_score" if field == "final_score" else field
-                orig_val = orig.get(orig_field)
-                if orig_val not in (None, "", []):
-                    # summary 回填时清理 HTML 标签
-                    if field == "summary" and isinstance(orig_val, str):
-                        orig_val = _strip_html(orig_val)
-                    cur = item.get(field)
-                    if cur in (None, "", []):
+    for item in briefing.get("items", []):
+        item_id = item.get("id", "")
+        orig = item_index.get(item_id)
+        if not orig:
+            continue
+        for field in _BACKFILL_FIELDS:
+            # ranking_agent 输出字段是 _score，映射到 final_score
+            orig_field = "_score" if field == "final_score" else field
+            orig_val = orig.get(orig_field)
+            if orig_val not in (None, "", []):
+                # summary 回填时清理 HTML 标签
+                if field == "summary" and isinstance(orig_val, str):
+                    orig_val = _strip_html(orig_val)
+                cur = item.get(field)
+                if cur in (None, "", []):
+                    item[field] = orig_val
+                else:
+                    # BUG-001: published_at 也需强制覆盖（LLM 可能生成不准确的日期）
+                    if isinstance(orig_val, (int, float)) or field in ("source", "url", "published_at"):
                         item[field] = orig_val
-                    else:
-                        # BUG-001: published_at 也需强制覆盖（LLM 可能生成不准确的日期）
-                        if isinstance(orig_val, (int, float)) or field in ("source", "url", "published_at"):
-                            item[field] = orig_val
-                elif item.get(field) in (None, "", []):
-                    if field == "published_at":
-                        item[field] = "未知时间"
-                    elif field == "source":
-                        item[field] = "unknown"
-                    elif field == "importance":
-                        item[field] = 3
+            elif item.get(field) in (None, "", []):
+                if field == "published_at":
+                    item[field] = "未知时间"
+                elif field == "source":
+                    item[field] = "unknown"
+                elif field == "importance":
+                    item[field] = 3
 
 
 def _parse_json_response(text: str) -> Dict[str, Any]:
@@ -284,35 +253,27 @@ def _render_markdown(briefing: Dict[str, Any]) -> str:
     if summary:
         lines.append(f"> {summary}")
         lines.append("")
-    for cat in briefing.get("categories", []):
-        cat_name = cat.get("name", "未分类")
-        items = cat.get("items", [])
-        count = cat.get("count", len(items))
-        if not items:
-            continue
-        lines.append(f"## {cat_name} ({count}条)")
-        lines.append("")
-        main_item = items[0]
-        # 主条目标题（粗体）
-        lines.append(f"**{main_item.get('title', '')}**")
+    for item in briefing.get("items", []):
+        # 条目标题（粗体）
+        lines.append(f"**{item.get('title', '')}**")
         lines.append("")
         # 摘要
-        item_summary = main_item.get('summary', '')
+        item_summary = item.get('summary', '')
         if item_summary:
             lines.append(f"摘要: {item_summary}")
             lines.append("")
         # 链接
-        url = main_item.get("url", "")
+        url = item.get("url", "")
         if url:
             lines.append(f"链接: {url}")
             lines.append("")
-        # 元信息行：- 来源 | 时间 | 重要性 | 评分
+        # 元信息行
         meta_parts = []
-        meta_parts.append(f"来源: {main_item.get('source', 'unknown')}")
-        pub_time = _format_datetime(main_item.get('published_at', ''))
+        meta_parts.append(f"来源: {item.get('source', 'unknown')}")
+        pub_time = _format_datetime(item.get('published_at', ''))
         meta_parts.append(f"时间: {pub_time}" if pub_time else "时间: 未知")
-        meta_parts.append(f"重要性: {_format_importance(main_item.get('importance', 0.5))}")
-        score = main_item.get('final_score') or main_item.get('score')
+        meta_parts.append(f"重要性: {_format_importance(item.get('importance', 0.5))}")
+        score = item.get('final_score') or item.get('score')
         if score is not None:
             try:
                 score_val = float(score)
@@ -321,18 +282,6 @@ def _render_markdown(briefing: Dict[str, Any]) -> str:
                 pass
         lines.append(f"- {' | '.join(meta_parts)}")
         lines.append("")
-        # 类似报道（加冒号）
-        similar_count = main_item.get("similar_count", 0)
-        if similar_count > 0:
-            lines.append(f"还有 {similar_count} 篇类似报道:")
-        # 子条目标题列表（全部展开）
-        if len(items) > 1:
-            for item in items[1:]:
-                title = item.get('title', '')
-                if title:
-                    lines.append(f"- {title}")
-        if similar_count > 0 or len(items) > 1:
-            lines.append("")
     lines.append(f"\n---\n*生成时间: {briefing.get('generated_at', '')}*")
     return "\n".join(lines)
 
@@ -487,7 +436,6 @@ def _check_contradiction(item1: Dict, item2: Dict) -> bool:
 def generate_briefing_node(state: FeedLensState) -> dict:
     ranked_items = state.get("ranked_items", [])
     goal_text = state.get("goal_text", "用户关注热点新闻")
-    categories = state.get("categories", DEFAULT_CATEGORIES)
     retry_count = state.get("briefing_result", {}).get("retry_count", 0)
     # P1-08-fix: 也支持 _generate_count（从 ReAct 循环传入，更准确）
     generate_count = state.get("_generate_count", retry_count + 1)
@@ -505,7 +453,7 @@ def generate_briefing_node(state: FeedLensState) -> dict:
     if not ranked_items:
         empty_briefing = {
             "title": "暂无内容", "summary": "当前没有符合条件的新闻条目",
-            "categories": [], "generated_at": "",
+            "items": [], "generated_at": "",
         }
         return {
             "briefing": empty_briefing,
@@ -513,8 +461,7 @@ def generate_briefing_node(state: FeedLensState) -> dict:
                                 "_preflight_warnings": preflight_warnings},
         }
     items_to_show = ranked_items[:MAX_ITEMS_PER_BRIEFING]
-    grouped = _group_by_category(items_to_show, categories)
-    prompt = _build_briefing_prompt(grouped, goal_text, categories)
+    prompt = _build_briefing_prompt(items_to_show, goal_text)
 
     # P1-08: 注入预检警告到 prompt
     if preflight_warnings:
@@ -531,57 +478,36 @@ def generate_briefing_node(state: FeedLensState) -> dict:
     briefing = _parse_json_response(response_text)
     if "error" in briefing or not briefing.get("title"):
         print(f"[generate_briefing] JSON 解析失败，使用默认简报", flush=True)
-        # P1-08-fix: 增强 fallback 简报，保留更多信息
-        fallback_categories = []
-        total_items = 0
-        for cat in categories:
-            cat_items = grouped.get(cat, [])
-            if not cat_items:
-                continue
-            total_items += len(cat_items)
-            # 主条目 + 其余作为类似报道子条目
-            cat_entry = {
-                "name": cat,
-                "items": [],
-                "count": len(cat_items),
+        # 增强 fallback 简报，所有条目平铺展示
+        fallback_items = []
+        for idx, item in enumerate(items_to_show):
+            entry = {
+                "id": item.get("id", f"fallback_{idx}"),
+                "title": item.get("title", ""),
+                "summary": (item.get("summary", "") or item.get("content", ""))[:500],
+                "source": item.get("source", item.get("source_name", "unknown")),
+                "published_at": item.get("published_at", ""),
+                "importance": item.get("importance", 3),
+                "final_score": item.get("_score", item.get("final_score", 0)),
+                "url": item.get("url", ""),
             }
-            for idx, item in enumerate(cat_items):
-                entry = {
-                    "id": item.get("id", f"fallback_{cat}_{idx}"),
-                    "title": item.get("title", ""),
-                    "summary": (item.get("summary", "") or item.get("content", ""))[:500],
-                    "source": item.get("source", item.get("source_name", "unknown")),
-                    "published_at": item.get("published_at", ""),
-                    "importance": item.get("importance", 3),
-                    "final_score": item.get("_score", item.get("final_score", 0)),
-                    "url": item.get("url", ""),
-                }
-                if idx == 0:
-                    entry["similar_count"] = max(0, len(cat_items) - 1)
-                cat_entry["items"].append(entry)
-            fallback_categories.append(cat_entry)
+            fallback_items.append(entry)
         # 生成标题和摘要
-        if total_items > 0:
-            first_title = (fallback_categories[0]["items"][0].get("title", "") if fallback_categories else "")
+        if fallback_items:
+            first_title = fallback_items[0].get("title", "")
             title = f"信息简报：{first_title[:30]}等" if first_title else "信息简报"
-            summary = f"共 {total_items} 条重要新闻，涵盖 {len(fallback_categories)} 个分类"
+            summary = f"共 {len(fallback_items)} 条重要新闻"
         else:
             title = "暂无内容"
             summary = "当前没有符合条件的新闻条目"
         briefing = {
             "title": title,
             "summary": summary,
-            "categories": fallback_categories,
+            "items": fallback_items,
             "generated_at": datetime.now().isoformat(),
         }
     item_index = _build_item_index(items_to_show)
     _backfill_briefing_items(briefing, item_index)
-    for cat_group in briefing.get("categories", []):
-        cat_items = cat_group.get("items", [])
-        if cat_items:
-            cat_name = cat_group.get("name", "")
-            total_in_cat = len(grouped.get(cat_name, []))
-            cat_items[0]["similar_count"] = max(0, total_in_cat - 1)
     markdown = _render_markdown(briefing)
     briefing["_markdown"] = markdown
     print(f"[generate_briefing] 完成: {briefing.get('title', 'untitled')}", flush=True)
@@ -608,16 +534,12 @@ def brief_quality_check_node(state: FeedLensState) -> dict:
 
     quality_detail = {"completeness": 0.0, "relevance": 0.0, "coherence": 0.0, "score": 0.0, "contradictions": []}
 
-    # completeness: 硬编码计算（不变）
-    categories = briefing.get("categories", [])
-    total_items_in_brief = sum(len(cat.get("items", [])) for cat in categories)
+    # completeness: 硬编码计算
+    all_items = briefing.get("items", [])
+    total_items_in_brief = len(all_items)
     effective_max = min(len(ranked_items), 10)
     completeness = min(1.0, total_items_in_brief / max(1, effective_max))
     quality_detail["completeness"] = completeness
-
-    all_items = []
-    for cat in categories:
-        all_items.extend(cat.get("items", []))
 
     # relevance: 独立 LLM 评估（仅首次调用，后续复用缓存）
     cached_relevance = briefing_result.get("_cached_relevance")
@@ -724,13 +646,12 @@ def run_briefing_agent(state: FeedLensState) -> dict:
 
     ranked_items = state.get("ranked_items", [])
     goal_text = state.get("goal_text", "用户关注热点新闻")
-    categories = state.get("categories", DEFAULT_CATEGORIES)
 
     # 读取配置
     config = load_config()
     max_retries = config.get("ranking", {}).get("briefing_max_retries", 2)
 
-    user_msg = f"排序条目数: {len(ranked_items)}\n用户目标: {goal_text}\n分类: {categories}"
+    user_msg = f"排序条目数: {len(ranked_items)}\n用户目标: {goal_text}"
 
     # 注入条目摘要（关键字段，避免 token 爆炸）
     if ranked_items:
@@ -802,8 +723,6 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                         tool_args["items"] = ranked_items
                     if "goal_text" not in tool_args:
                         tool_args["goal_text"] = goal_text
-                    if "categories" not in tool_args:
-                        tool_args["categories"] = categories
                 # P1-08: 移除 quality_check 工具分支（改为代码层自动评估）
 
                 t_tool_start = time.perf_counter()
