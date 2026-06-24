@@ -232,6 +232,10 @@ def render():
                                     st.markdown(f"**{entry_title}**")
                                 else:
                                     st.markdown(f"- {entry_title}")
+                                    # 类似报道也显示链接
+                                    sim_url = entry.get("url", "")
+                                    if sim_url:
+                                        st.caption(f"链接: {sim_url}")
                                 st.markdown("")
 
                                 # 仅主条目渲染摘要、链接、元信息
@@ -264,8 +268,8 @@ def render():
                                     if similar_count > 0 and len(cat_items) > 1:
                                         st.caption(f"还有 {similar_count} 篇类似报道:")
 
-                                # 反馈按钮（每个条目内部显示）
-                                if matched:
+                                # 反馈按钮（仅主条目显示，类似报道不显示）
+                                if idx == 0 and matched:
                                     item_id = matched["item_id"]
                                     existing_fb = _check_item_feedback(item_id)
                                     fb_key = f"fb_{brief_id}_{item_id}"

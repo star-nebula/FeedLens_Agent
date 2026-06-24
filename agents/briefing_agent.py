@@ -57,8 +57,9 @@ BRIEFING_SCHEMA = {
                                 "published_at": {"type": "string"},
                                 "importance": {"type": "number"},
                                 "similar_count": {"type": "integer"},
+                                "url": {"type": "string", "description": "条目链接"},
                             },
-                            "required": ["id", "title", "summary"],
+                            "required": ["id", "title"],
                         },
                     },
                     "count": {"type": "integer"},
@@ -106,16 +107,24 @@ def _build_briefing_prompt(grouped: Dict[str, List[Dict]], goal_text: str, categ
         if not cat_items:
             continue
         items_text.append(f"\n## {cat}（共{len(cat_items)}条）")
-        for i, item in enumerate(cat_items[:5]):
+        # 主条目（第1条）展示完整信息
+        main_item = cat_items[0]
+        raw_summary = main_item.get('summary', '') or ''
+        clean_summary = _strip_html(raw_summary)[:100]
+        items_text.append(
+            f"★ 主条目 [{main_item.get('id', 'item_0')}] {main_item.get('title', '')}\n"
+            f"  摘要: {clean_summary}\n"
+            f"  来源: {main_item.get('source', 'unknown')} | "
+            f"  时间: {main_item.get('published_at', '')} | "
+            f"  链接: {main_item.get('url', '')} | "
+            f"重要性: {_format_importance(main_item.get('importance', 0.5))}"
+        )
+        # 其余条目作为类似报道，保留 id + title + url
+        for i, item in enumerate(cat_items[1:]):
             items_text.append(
-                f"- [{item.get('id', f'item_{i}')}] {item.get('title', '')}\n"
-                f"  摘要: {item.get('summary', '')[:100]}\n"
-                f"  来源: {item.get('source', 'unknown')} | "
-                f"  时间: {item.get('published_at', '')} | "
-                f"重要性: {_format_importance(item.get('importance', 0.5))}"
+                f"  - 类似报道 [{item.get('id', f'item_{i+1}')}] "
+                f"{item.get('title', '')} | url: {item.get('url', '')}"
             )
-        if len(cat_items) > 5:
-            items_text.append(f"  还有 {len(cat_items) - 5} 篇类似报道...")
     items_block = "\n".join(items_text) if items_text else "（无条目）"
     prompt = f"""你是一个简报生成助手。根据以下信息生成一份结构化 JSON 简报。
 
@@ -128,14 +137,16 @@ def _build_briefing_prompt(grouped: Dict[str, List[Dict]], goal_text: str, categ
 ## 输出要求
 
 ## 输出风格: detailed
-每条条目保留完整信息（id, title, summary, source, published_at, importance）
+主条目保留完整信息，类似报道保留 id + title + url
 
 1. title：简报标题，简洁有力
 2. summary：简报摘要，50字以内
-3. categories：按以下分类组织，每类只选最重要的一条作为主条目，其余作为类似报道
-4. 每条主条目保留完整信息（id, title, summary, source, published_at, importance）
-5. 类似报道只保留 id, title, similar_count（类似报道数量）
-6. generated_at：当前时间，ISO 格式
+3. categories：按以下分类组织，每个分类选1条最重要条目作为主条目（★标记的），其余全部作为类似报道
+4. 主条目保留完整信息（id, title, summary, source, published_at, importance, url）
+5. 类似报道保留 id, title, url，不可遗漏（summary 可以为空字符串）
+6. 每个分类的 count 字段填写该类条目总数（主条目 + 类似报道），必须等于输入条目数
+7. generated_at：当前时间，ISO 格式
+8. ⚠️ 关键：必须将输入的所有条目都包含在输出中，不允许丢弃任何条目
 
 ## JSON Schema
 {json.dumps(BRIEFING_SCHEMA, ensure_ascii=False, indent=2)}
@@ -154,7 +165,23 @@ def _build_item_index(ranked_items: List[Dict[str, Any]]) -> Dict[str, Dict[str,
     return index
 
 
-_BACKFILL_FIELDS = ["published_at", "source", "url", "importance", "category", "final_score"]
+_BACKFILL_FIELDS = ["published_at", "source", "url", "importance", "category", "final_score", "summary"]
+
+import html as _html
+
+
+def _strip_html(text: str) -> str:
+    """去除 HTML 标签，将 &amp; &lt; &gt; 等实体还原为普通字符。"""
+    if not text:
+        return text
+    import re as _re
+    # 先去除 HTML 标签
+    cleaned = _re.sub(r'<[^>]+>', '', text)
+    # 再还原 HTML 实体
+    cleaned = _html.unescape(cleaned)
+    # 合并多余空白
+    cleaned = _re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
 
 
 def _backfill_briefing_items(briefing: Dict[str, Any], item_index: Dict[str, Dict[str, Any]]) -> None:
@@ -169,6 +196,9 @@ def _backfill_briefing_items(briefing: Dict[str, Any], item_index: Dict[str, Dic
                 orig_field = "_score" if field == "final_score" else field
                 orig_val = orig.get(orig_field)
                 if orig_val not in (None, "", []):
+                    # summary 回填时清理 HTML 标签
+                    if field == "summary" and isinstance(orig_val, str):
+                        orig_val = _strip_html(orig_val)
                     cur = item.get(field)
                     if cur in (None, "", []):
                         item[field] = orig_val

@@ -78,23 +78,17 @@ def _seed_default_sources():
         from agents.collection_agent import DEFAULT_RSS_SOURCES
     except Exception:
         DEFAULT_RSS_SOURCES = [
-            "https://rsshub.app/solidot/",
-            "https://rsshub.app/36kr/information/web_news/",
-            "https://rsshub.app/36kr/news/latest",
-            "https://rsshub.app/zhihu/daily",
-            "https://rsshub.app/v2ex/topics/latest",
-            "https://feeds.bbci.co.uk/news/technology/rss.xml",
-            "https://rsshub.app/github/trending/daily",
+            "https://36kr.com/feed",
+            "https://sspai.com/feed",
+            "https://www.ruanyifeng.com/blog/atom.xml",
+            "https://www.solidot.org/index.rss",
         ]
 
     source_meta = {
-        "https://rsshub.app/solidot/": ("Solidot", "科技"),
-        "https://rsshub.app/36kr/information/web_news/": ("36氪资讯", "科技"),
-        "https://rsshub.app/36kr/news/latest": ("36氪最新", "科技"),
-        "https://rsshub.app/zhihu/daily": ("知乎日报", "科技"),
-        "https://rsshub.app/v2ex/topics/latest": ("V2EX", "科技"),
-        "https://feeds.bbci.co.uk/news/technology/rss.xml": ("BBC Technology", "科技"),
-        "https://rsshub.app/github/trending/daily": ("GitHub Trending", "开源"),
+        "https://36kr.com/feed": ("36氪资讯", "科技"),
+        "https://sspai.com/feed": ("少数派", "科技"),
+        "https://www.ruanyifeng.com/blog/atom.xml": ("阮一峰周刊", "科技"),
+        "https://www.solidot.org/index.rss": ("Solidot", "科技"),
     }
 
     db = _get_db()
