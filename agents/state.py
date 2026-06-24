@@ -52,6 +52,9 @@ class FeedLensState(TypedDict, total=False):
     push_message: str
 
     # ---- 反馈 ----
+    item_id: int                              # 反馈目标条目 ID（feedback_agent 使用）
+    brief_id: int                             # 反馈所属简报 ID（feedback_agent 使用）
+    feedback_type: str                        # 反馈类型: like / dislike / irrelevant
     feedback_results: list[dict[str, Any]]   # 反馈子 Agent 处理结果
     feedback_count: int                      # 累计反馈数（用于冷启动/偏好切换判断）
 

@@ -163,17 +163,19 @@ def render():
 
         # 简报卡片
         with st.container():
-            col1, col2, col3 = st.columns([3, 1, 1])
-            with col1:
-                st.subheader(f"简报 #{brief_id}")
-            with col2:
-                st.metric("质量分", f"{quality_score:.2f}")
-            with col3:
-                if st.button("🗑️", key=f"del_{brief_id}", use_container_width=True):
-                    _delete_brief(brief_id)
-                    st.rerun()
+            # 解析 content_json 获取条目数（提前计算用于标题行）
+            items = _load_brief_items(brief_id)
+            brief_json = {}
+            try:
+                brief_json = json.loads(brief.get("content_json", "{}"))
+            except (json.JSONDecodeError, TypeError):
+                pass
+            categories = brief_json.get("categories", [])
+            item_count = sum(len(cat.get("items", [])) for cat in categories)
+            if item_count == 0:
+                item_count = len(items) if items else 0
 
-            # 时区转换
+            # 格式化生成时间
             try:
                 dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
                 if dt.tzinfo is None:
@@ -181,71 +183,120 @@ def render():
                 local_dt = dt.astimezone(timezone(timedelta(hours=8)))
                 created_at_display = local_dt.strftime("%Y-%m-%d %H:%M:%S")
             except Exception:
-                created_at_display = created_at
-            st.caption(f"生成时间: {created_at_display}")
+                created_at_display = str(created_at)
 
-            # 合并显示：Markdown 内容 + 反馈图标在同一个 expander 中
-            items = _load_brief_items(brief_id)
-            has_content = bool(brief.get("content_md"))
-            has_items = bool(items)
-            if has_content or has_items:
-                item_count = len(items) if items else 0
-                label = f"📄 查看简报内容 ({item_count} 条)"
-                with st.expander(label, expanded=False):
-                    # 1) Markdown 正文
-                    if has_content:
-                        st.markdown(brief["content_md"])
-                    # 2) 逐条目反馈图标行（紧接 Markdown 下方）
-                    if items:
-                        # 用 JSON 解析 content_json 获取 categories 结构，匹配 item_id
-                        item_map = {item["item_id"]: item for item in items}
-                        brief_json = {}
-                        try:
-                            brief_json = json.loads(brief.get("content_json", "{}"))
-                        except (json.JSONDecodeError, TypeError):
-                            pass
-                        categories = brief_json.get("categories", [])
+            if item_count > 0:
+                # expander 与删除按钮并排：expander 占绝大部分，删除按钮右对齐
+                exp_col, del_col = st.columns([20, 1])
+                with exp_col:
+                    with st.expander(f"📄 简报数量：{item_count}  |  {created_at_display}  |  质量分：{quality_score:.2f}", expanded=False):
+                        # 构建 item_id → db_item 映射
+                        item_map = {}
+                        for item in items:
+                            item_map[item["item_id"]] = item
+
+                        # 简报标题
+                        title = brief_json.get("title", "")
+                        if title:
+                            st.markdown(f"# {title}")
+
+                        # 简报摘要
+                        summary = brief_json.get("summary", "")
+                        if summary:
+                            st.markdown(f"> {summary}")
+                        st.markdown("")
+
+                        # 逐分类渲染
                         for cat in categories:
+                            cat_name = cat.get("name", "未分类")
                             cat_items = cat.get("items", [])
+                            if not cat_items:
+                                continue
+                            count = cat.get("count", len(cat_items))
+                            st.markdown(f"## {cat_name} ({count}条)")
+                            st.markdown("")
+
+                            # 逐条目渲染：条目文本 + 反馈按钮
                             for idx, entry in enumerate(cat_items):
                                 entry_id = entry.get("id", "")
-                                # 尝试匹配 item_id（entry.id 可能是字符串/数字混合）
+                                # 匹配 briefing_items
                                 matched = None
                                 for item in items:
                                     if str(item["item_id"]) == str(entry_id):
                                         matched = item
                                         break
-                                if not matched:
-                                    continue
-                                item_id = matched["item_id"]
-                                existing_fb = _check_item_feedback(item_id)
-                                # 反馈图标行
-                                fb_key = f"fb_{brief_id}_{item_id}"
-                                if existing_fb:
-                                    icon_map = {"like": "❤️", "dislike": "💔", "irrelevant": "🚫"}
-                                    st.caption(f"{icon_map.get(existing_fb, '')} 已反馈：{existing_fb}")
-                                else:
-                                    c1, c2, c3, c4 = st.columns([1, 1, 1, 7])
-                                    with c1:
-                                        if st.button("👍", key=f"like_{fb_key}", help="喜欢"):
-                                            _add_feedback_with_agent(item_id, "like", brief_id)
-                                            st.toast("✅ 已标记：喜欢")
-                                            st.rerun()
-                                    with c2:
-                                        if st.button("👎", key=f"dislike_{fb_key}", help="不喜欢"):
-                                            _add_feedback_with_agent(item_id, "dislike", brief_id)
-                                            st.toast("✅ 已标记：不喜欢")
-                                            st.rerun()
-                                    with c3:
-                                        if st.button("🚫", key=f"irr_{fb_key}", help="不相关"):
-                                            _add_feedback_with_agent(item_id, "irrelevant", brief_id)
-                                            st.toast("✅ 已标记：不相关")
-                                            st.rerun()
-                                # 只在主条目（idx==0）显示反馈，子条目不重复显示
-                                if idx == 0:
-                                    st.markdown("")  # 间距
 
-            st.markdown("---")
+                                # 条目标题（主条目粗体，子条目列表项）
+                                entry_title = entry.get("title", "")
+                                if idx == 0:
+                                    st.markdown(f"**{entry_title}**")
+                                else:
+                                    st.markdown(f"- {entry_title}")
+                                st.markdown("")
+
+                                # 仅主条目渲染摘要、链接、元信息
+                                if idx == 0:
+                                    item_summary = entry.get("summary", "")
+                                    if item_summary:
+                                        st.caption(f"摘要: {item_summary}")
+                                    url = entry.get("url", "")
+                                    if url:
+                                        st.caption(f"链接: {url}")
+                                    # 元信息行
+                                    meta_parts = []
+                                    meta_parts.append(f"来源: {entry.get('source', 'unknown')}")
+                                    pub_time = entry.get("published_at", "")
+                                    if pub_time:
+                                        meta_parts.append(f"时间: {pub_time}")
+                                    imp = entry.get("importance", 0)
+                                    if imp:
+                                        meta_parts.append(f"重要性: {imp}/5")
+                                    score = entry.get("final_score")
+                                    if score is not None:
+                                        try:
+                                            meta_parts.append(f"评分: {float(score):.3f}")
+                                        except (TypeError, ValueError):
+                                            pass
+                                    st.caption(f"{' | '.join(meta_parts)}")
+
+                                    # 类似报道提示
+                                    similar_count = entry.get("similar_count", 0)
+                                    if similar_count > 0 and len(cat_items) > 1:
+                                        st.caption(f"还有 {similar_count} 篇类似报道:")
+
+                                # 反馈按钮（每个条目内部显示）
+                                if matched:
+                                    item_id = matched["item_id"]
+                                    existing_fb = _check_item_feedback(item_id)
+                                    fb_key = f"fb_{brief_id}_{item_id}"
+                                    if existing_fb:
+                                        icon_map = {"like": "❤️", "dislike": "💔", "irrelevant": "🚫"}
+                                        st.caption(f"{icon_map.get(existing_fb, '')} 已反馈：{existing_fb}")
+                                    else:
+                                        c1, c2, c3, c4 = st.columns([1, 1, 1, 7])
+                                        with c1:
+                                            if st.button("👍", key=f"like_{fb_key}", help="喜欢"):
+                                                _add_feedback_with_agent(item_id, "like", brief_id)
+                                                st.toast("✅ 已标记：喜欢")
+                                                st.rerun()
+                                        with c2:
+                                            if st.button("👎", key=f"dislike_{fb_key}", help="不喜欢"):
+                                                _add_feedback_with_agent(item_id, "dislike", brief_id)
+                                                st.toast("✅ 已标记：不喜欢")
+                                                st.rerun()
+                                        with c3:
+                                            if st.button("🚫", key=f"irr_{fb_key}", help="不相关"):
+                                                _add_feedback_with_agent(item_id, "irrelevant", brief_id)
+                                                st.toast("✅ 已标记：不相关")
+                                                st.rerun()
+
+                                st.markdown("")  # 条目间距
+                # expander 块结束 (exp_col)
+                with del_col:
+                    if st.button("🗑️", key=f"del_{brief_id}", help="删除简报"):
+                        _delete_brief(brief_id)
+                        st.rerun()
+
 
 
 def render_sidebar():

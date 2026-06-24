@@ -130,7 +130,10 @@ def update_preference_node(state: FeedLensState) -> dict:
     try:
         with db.get_connection() as conn:
             cursor = conn.execute(
-                "SELECT title, summary, keywords, category FROM deduped_items WHERE id = ?",
+                """SELECT ri.title, ri.summary, di.keywords, di.category
+                   FROM deduped_items di
+                   JOIN raw_items ri ON di.representative_item_id = ri.id
+                   WHERE di.id = ?""",
                 (item_id,),
             )
             row = cursor.fetchone()

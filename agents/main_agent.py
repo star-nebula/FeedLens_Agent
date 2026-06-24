@@ -991,19 +991,16 @@ def update_memory_node(state: FeedLensState) -> dict:
             user_id_local = state.get("user_id", 1)
             quality_score = state.get("brief_quality", 0.0)
 
-            content_json = json.dumps(briefing_data, ensure_ascii=False)
+            # 先建立 ranked_items 原始 ID → dedup_id 的映射
+            # briefing_agent 用 ranked_items 中的 id 作为条目标识，存入 content_json
+            # 而 briefing_items 表用 deduped_items 自增 ID，需要建立映射用于 ID 替换
+            id_to_dedup = {}  # str(原始id) → dedup_id (int)
+
             content_md = briefing_data.get("_markdown", "")
             with db2.get_connection() as conn:
-                cursor = conn.execute(
-                    """INSERT INTO briefs (user_id, content_json, content_md, quality_score)
-                       VALUES (?, ?, ?, ?)""",
-                    (user_id_local, content_json, content_md, quality_score),
-                )
-                brief_id = cursor.lastrowid
-
-                # 写入 ranked_items → deduped_items + briefing_items
+                # 先写入 ranked_items → raw_items + deduped_items，建立映射
                 for rank, item in enumerate(ranked_items, start=1):
-                    item_id_str = item.get("id", "")
+                    item_id_str = str(item.get("id", ""))
                     title = item.get("title", "")
                     summary = item.get("summary", "")
                     url = item.get("url", "")
@@ -1038,14 +1035,45 @@ def update_memory_node(state: FeedLensState) -> dict:
                     )
                     dedup_id = dedup_cursor.lastrowid
 
-                    # 3) 写入 briefing_items
+                    # 建立映射：原始 id → dedup_id
+                    if item_id_str:
+                        id_to_dedup[item_id_str] = dedup_id
+
+                # 替换 briefing_data 中 categories[].items[].id 为 dedup_id
+                # 这样 content_json 中的 ID 就能和 briefing_items.item_id 对应
+                for cat_group in briefing_data.get("categories", []):
+                    for entry in cat_group.get("items", []):
+                        old_id = str(entry.get("id", ""))
+                        if old_id in id_to_dedup:
+                            entry["id"] = id_to_dedup[old_id]
+
+                # 序列化修正后的 JSON
+                content_json = json.dumps(briefing_data, ensure_ascii=False)
+
+                # 写入 briefs 表
+                cursor = conn.execute(
+                    """INSERT INTO briefs (user_id, content_json, content_md, quality_score)
+                       VALUES (?, ?, ?, ?)""",
+                    (user_id_local, content_json, content_md, quality_score),
+                )
+                brief_id = cursor.lastrowid
+
+                # 写入 briefing_items（使用 dedup_id）
+                for rank, item in enumerate(ranked_items, start=1):
+                    item_id_str = str(item.get("id", ""))
+                    dedup_id = id_to_dedup.get(item_id_str)
+                    if dedup_id is None:
+                        continue
+                    final_score = item.get("_score", 0.0)
+                    is_highlight = 1 if item.get("is_highlight") else 0
                     conn.execute(
                         """INSERT INTO briefing_items (briefing_id, item_id, rank, final_score, is_highlight)
                            VALUES (?, ?, ?, ?, ?)""",
                         (brief_id, dedup_id, rank, final_score, is_highlight),
                     )
 
-            print(f"[update_memory] 简报已保存: brief_id={brief_id}, items={len(ranked_items)}", flush=True)
+            print(f"[update_memory] 简报已保存: brief_id={brief_id}, items={len(ranked_items)}, "
+                  f"id映射数={len(id_to_dedup)}", flush=True)
         except Exception as e:
             import traceback
             print(f"[update_memory] 简报保存失败: {e}", flush=True)

@@ -1,0 +1,8 @@
+[server]
+# 排除 transformers 等大型库的文件监控，避免无关报错
+fileWatcherBlacklist = [
+    "**/transformers/**",
+    "**/torch/**",
+    "**/torchvision/**",
+    "**/site-packages/**",
+]
