@@ -212,15 +212,19 @@ def _execute_generate_briefing(arguments: dict) -> dict:
     goal_text = arguments.get("goal_text", "用户关注热点新闻")
     categories = arguments.get("categories", ["科技", "商业", "社会", "其他"])
 
+    # P1-08-fix: 传递 _generate_count 供 generate_briefing_node 日志使用
+    gen_count = arguments.get("_generate_count", arguments.get("retry_count", 0) + 1)
     temp_state = {
         "ranked_items": items,
         "goal_text": goal_text,
         "categories": categories,
         "briefing_result": {"retry_count": arguments.get("retry_count", 0)},
+        "_generate_count": gen_count,
     }
     result = generate_briefing_node(temp_state)
     briefing = result.get("briefing", {})
-    return {"briefing": briefing, "markdown": briefing.get("_markdown", "")}
+    return {"briefing": briefing, "briefing_result": result.get("briefing_result", {}),
+            "markdown": briefing.get("_markdown", "")}
 
 
 def _execute_quality_check(arguments: dict) -> dict:

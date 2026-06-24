@@ -741,6 +741,8 @@ def observe_results_node(state: FeedLensState) -> dict:
         "threshold_ranking": 0.3,
         "threshold_briefing": 0.7,
         "expected_brief_items": 10,
+        # P1-08-fix: 传递简报摘要，用于判断是否已达内部重试上限
+        "briefing_summary": state.get("briefing_result", {}).get("briefing_summary", ""),
     })
     observation = {
         "collection_ok": ctx.get("collection_ok", len(collected) >= 3),
@@ -1160,6 +1162,18 @@ def _default_observe_evaluate(ctx: dict) -> dict:
     briefing_ok = brief_quality > 0 and brief_quality >= th_brief
     briefing_count_ok = len(ranked) >= expected
     suggest_expand = (not briefing_count_ok) and (len(collected) >= expected)
+
+    # P1-08-fix: 如果 Briefing Agent 内部已达重试上限，不再触发 Planner 重试
+    # 避免 Planner 重新调度整个 Briefing Agent 做无用功
+    briefing_summary = ctx.get("briefing_summary", "")
+    briefing_exhausted = ("已达最大重试次数" in briefing_summary or
+                          "强制收敛" in briefing_summary)
+    if briefing_exhausted and brief_quality > 0 and not briefing_ok:
+        # Briefing 已尽力但未达标 → 标记为 OK（接受当前结果），避免浪费 API
+        briefing_ok = True
+        print(f"[observe] Briefing Agent 内部已达重试上限 (quality={brief_quality:.4f})，"
+              f"接受当前结果不再重试", flush=True)
+
     needs_retry = not (collection_ok and ranking_ok and briefing_ok and briefing_count_ok)
 
     issues = []

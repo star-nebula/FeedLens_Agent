@@ -186,12 +186,22 @@ def _backfill_briefing_items(briefing: Dict[str, Any], item_index: Dict[str, Dic
 
 
 def _parse_json_response(text: str) -> Dict[str, Any]:
+    """解析 LLM 返回的 JSON，带多层 fallback。"""
+    # 1. 尝试提取 ```json ... ``` 代码块
+    code_block = re.search(r'```(?:json)?\s*([\s\S]*?)```', text)
+    if code_block:
+        try:
+            return json.loads(code_block.group(1))
+        except json.JSONDecodeError:
+            pass
+    # 2. 尝试提取最外层 {...} 
     json_match = re.search(r'\{[\s\S]*\}', text)
     if json_match:
         try:
             return json.loads(json_match.group())
         except json.JSONDecodeError:
             pass
+    # 3. 尝试直接解析全文
     try:
         return json.loads(text)
     except json.JSONDecodeError:
@@ -449,6 +459,8 @@ def generate_briefing_node(state: FeedLensState) -> dict:
     goal_text = state.get("goal_text", "用户关注热点新闻")
     categories = state.get("categories", DEFAULT_CATEGORIES)
     retry_count = state.get("briefing_result", {}).get("retry_count", 0)
+    # P1-08-fix: 也支持 _generate_count（从 ReAct 循环传入，更准确）
+    generate_count = state.get("_generate_count", retry_count + 1)
 
     # P1-08: 生成前硬编码预检
     config = load_config()
@@ -458,7 +470,7 @@ def generate_briefing_node(state: FeedLensState) -> dict:
     ranked_items = preflight["items"]
     preflight_warnings = preflight["warnings"]
 
-    print(f"[generate_briefing] 第 {retry_count + 1} 次生成，预检后条目数: {len(ranked_items)}", flush=True)
+    print(f"[generate_briefing] 第 {generate_count} 次生成，预检后条目数: {len(ranked_items)}", flush=True)
 
     if not ranked_items:
         empty_briefing = {
@@ -489,15 +501,48 @@ def generate_briefing_node(state: FeedLensState) -> dict:
     briefing = _parse_json_response(response_text)
     if "error" in briefing or not briefing.get("title"):
         print(f"[generate_briefing] JSON 解析失败，使用默认简报", flush=True)
+        # P1-08-fix: 增强 fallback 简报，保留更多信息
         fallback_categories = []
+        total_items = 0
         for cat in categories:
             cat_items = grouped.get(cat, [])
-            if cat_items:
-                main_item = {**cat_items[0], "similar_count": max(0, len(cat_items) - 1)}
-                fallback_categories.append({"name": cat, "items": [main_item]})
+            if not cat_items:
+                continue
+            total_items += len(cat_items)
+            # 主条目 + 其余作为类似报道子条目
+            cat_entry = {
+                "name": cat,
+                "items": [],
+                "count": len(cat_items),
+            }
+            for idx, item in enumerate(cat_items):
+                entry = {
+                    "id": item.get("id", f"fallback_{cat}_{idx}"),
+                    "title": item.get("title", ""),
+                    "summary": (item.get("summary", "") or item.get("content", ""))[:200],
+                    "source": item.get("source", item.get("source_name", "unknown")),
+                    "published_at": item.get("published_at", ""),
+                    "importance": item.get("importance", 3),
+                    "final_score": item.get("_score", item.get("final_score", 0)),
+                    "url": item.get("url", ""),
+                }
+                if idx == 0:
+                    entry["similar_count"] = max(0, len(cat_items) - 1)
+                cat_entry["items"].append(entry)
+            fallback_categories.append(cat_entry)
+        # 生成标题和摘要
+        if total_items > 0:
+            first_title = (fallback_categories[0]["items"][0].get("title", "") if fallback_categories else "")
+            title = f"信息简报：{first_title[:30]}等" if first_title else "信息简报"
+            summary = f"共 {total_items} 条重要新闻，涵盖 {len(fallback_categories)} 个分类"
+        else:
+            title = "暂无内容"
+            summary = "当前没有符合条件的新闻条目"
         briefing = {
-            "title": "简报生成", "summary": f"生成了 {len(items_to_show)} 条重要新闻",
-            "categories": fallback_categories, "generated_at": "",
+            "title": title,
+            "summary": summary,
+            "categories": fallback_categories,
+            "generated_at": datetime.now().isoformat(),
         }
     item_index = _build_item_index(items_to_show)
     _backfill_briefing_items(briefing, item_index)
@@ -686,7 +731,8 @@ def run_briefing_agent(state: FeedLensState) -> dict:
     timing = {"llm_calls": [], "tool_calls": []}
 
     max_turns = 4  # P1-08: 从 5 降为 4（2次重试最多3轮 generate，每轮 generate 后 finish_task）
-    generate_count = 0  # 硬限制 generate_briefing 调用次数
+    generate_count = 0  # 硬限制 generate_briefing 调用次数（含首次）
+    quality_check_count = 0  # P1-08-fix: 独立计数 quality LLM 调用
     for turn in range(max_turns):
         t_turn_start = time.perf_counter()
         print(f"[briefing_react] 第 {turn + 1} 轮思考...", flush=True)
@@ -751,6 +797,7 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                     current_state["ranked_items"] = ranked_items
                     current_state["goal_text"] = goal_text
                     quality_result = brief_quality_check_node(current_state)
+                    quality_check_count += 1
                     brief_quality = quality_result.get("brief_quality", 0.0)
                     current_state["brief_quality"] = brief_quality
                     current_state["quality_detail"] = quality_result.get("quality_detail", {})
@@ -758,7 +805,7 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                     updated_briefing_result = quality_result.get("briefing_result", {})
                     current_state["briefing_result"] = updated_briefing_result
 
-                    # 判断质量是否达标
+                    # 判断质量是否达标（首次生成后即检查）
                     if brief_quality >= 0.7:
                         t_turn_total = time.perf_counter() - t_turn_start
                         print(f"[briefing_react] 质量达标 ({brief_quality:.4f})，自动完成", flush=True)
@@ -770,7 +817,8 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                         })
                         t_agent_elapsed = time.perf_counter() - t_agent_start
                         print(f"[briefing_react] ⏱️ 简报 Agent 总耗时: {t_agent_elapsed:.2f}s, "
-                              f"ReAct 轮数: {turn + 1}, generate 次数: {generate_count}, timing={timing}", flush=True)
+                              f"ReAct 轮数: {turn + 1}, generate 次数: {generate_count}, "
+                              f"quality_check 次数: {quality_check_count}, timing={timing}", flush=True)
                         return {
                             "briefing": briefing,
                             "brief_quality": brief_quality,
@@ -780,19 +828,21 @@ def run_briefing_agent(state: FeedLensState) -> dict:
                             "briefing_timing": timing,
                         }
 
-                    # P1-08: 重试上限检查（max_retries，从 3 降为 2）
-                    if generate_count > max_retries:
+                    # P1-08-fix: 重试上限检查（generate_count >= max_retries 即强制收敛）
+                    # max_retries=2 意味着：首次 + 最多1次重试 = 2次 generate
+                    if generate_count >= max_retries:
                         t_agent_elapsed = time.perf_counter() - t_agent_start
                         print(f"[briefing_react] generate_briefing 已达 {generate_count} 次（上限 {max_retries}），"
                               f"强制 finish（质量={brief_quality:.4f}）", flush=True)
                         print(f"[briefing_react] ⏱️ 简报 Agent 总耗时: {t_agent_elapsed:.2f}s, "
-                              f"ReAct 轮数: {turn + 1}, timing={timing}", flush=True)
+                              f"ReAct 轮数: {turn + 1}, generate 次数: {generate_count}, "
+                              f"quality_check 次数: {quality_check_count}, timing={timing}", flush=True)
                         return {
                             "briefing": briefing,
                             "brief_quality": brief_quality,
                             "quality_detail": current_state.get("quality_detail", {}),
                             "briefing_result": updated_briefing_result,
-                            "briefing_summary": f"已达最大重试次数({generate_count})，强制收敛",
+                            "briefing_summary": f"已达最大重试次数({generate_count}/{max_retries})，强制收敛",
                             "briefing_timing": timing,
                         }
 

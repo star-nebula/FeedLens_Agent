@@ -311,9 +311,12 @@ def _prefilter_against_history(
         from models.vector_store import VectorStore
         from utils.embedding import EmbeddingModel
 
-        vs = VectorStore(persist_dir="data/chroma")
-        vs.init_collections()
         em = EmbeddingModel()
+        # 🔧 必须传入 embedding_fn，与 update_memory_node 保持一致
+        # 否则不带 embedding_fn 创建 VectorStore 会与已注册 BgeEmbeddingFunction
+        # 的集合冲突，触发 "embedding function conflict" → delete_collection → 数据丢失
+        vs = VectorStore(persist_dir="data/chroma", embedding_fn=em.encode)
+        vs.init_collections()
 
         # 检查 feed_items 集合是否为空（冷启动场景）
         feed_col = vs.get_collection("feed_items")
