@@ -432,7 +432,7 @@ def run_ranking_agent(state: FeedLensState) -> dict:
             title = item.get("title", "")[:100]
             source = item.get("source_name", item.get("source_url", ""))[:60]
             pub = item.get("published_at", "")[:19]
-            summary = (item.get("summary", "") or item.get("content", ""))[:120]
+            summary = (item.get("summary", "") or item.get("content", ""))[:500]
             item_id = item.get("id", f"item_{i}")
             user_msg += (
                 f"[{i}] id={item_id} | title={title} | source={source} | "

@@ -110,7 +110,7 @@ def _build_briefing_prompt(grouped: Dict[str, List[Dict]], goal_text: str, categ
         # 主条目（第1条）展示完整信息
         main_item = cat_items[0]
         raw_summary = main_item.get('summary', '') or ''
-        clean_summary = _strip_html(raw_summary)[:100]
+        clean_summary = _strip_html(raw_summary)[:500]
         items_text.append(
             f"★ 主条目 [{main_item.get('id', 'item_0')}] {main_item.get('title', '')}\n"
             f"  摘要: {clean_summary}\n"
@@ -140,7 +140,7 @@ def _build_briefing_prompt(grouped: Dict[str, List[Dict]], goal_text: str, categ
 主条目保留完整信息，类似报道保留 id + title + url
 
 1. title：简报标题，简洁有力
-2. summary：简报摘要，50字以内
+2. summary：简报摘要，100字以内
 3. categories：按以下分类组织，每个分类选1条最重要条目作为主条目（★标记的），其余全部作为类似报道
 4. 主条目保留完整信息（id, title, summary, source, published_at, importance, url）
 5. 类似报道保留 id, title, url，不可遗漏（summary 可以为空字符串）
@@ -549,7 +549,7 @@ def generate_briefing_node(state: FeedLensState) -> dict:
                 entry = {
                     "id": item.get("id", f"fallback_{cat}_{idx}"),
                     "title": item.get("title", ""),
-                    "summary": (item.get("summary", "") or item.get("content", ""))[:200],
+                    "summary": (item.get("summary", "") or item.get("content", ""))[:500],
                     "source": item.get("source", item.get("source_name", "unknown")),
                     "published_at": item.get("published_at", ""),
                     "importance": item.get("importance", 3),
@@ -739,7 +739,7 @@ def run_briefing_agent(state: FeedLensState) -> dict:
             title = item.get("title", "")[:100]
             source = item.get("source_name", item.get("source_url", item.get("source", "")))[:60]
             pub = item.get("published_at", "")[:19]
-            summary = (item.get("summary", "") or item.get("content", ""))[:120]
+            summary = (item.get("summary", "") or item.get("content", ""))[:500]
             item_id = item.get("id", f"item_{i}")
             importance = item.get("importance", item.get("_score", 0.5))
             user_msg += (
