@@ -145,8 +145,23 @@ def fetch_rss(
             try:
                 items = future.result()
                 all_items.extend(items)
+                # 统计每个源的采集结果
+                error_items = [it for it in items if "error" in it]
+                valid_count = len(items) - len(error_items)
+                if error_items:
+                    err_detail = error_items[0].get("error", "unknown")
+                    print(f"[fetch_rss] ✗ {url} → 失败 ({err_detail})", flush=True)
+                elif valid_count > 0:
+                    print(f"[fetch_rss] ✓ {url} → {valid_count} 条", flush=True)
+                else:
+                    print(f"[fetch_rss] ~ {url} → 0 条（源可能无新内容）", flush=True)
             except TimeoutError:
+                print(f"[fetch_rss] ✗ {url} → 超时", flush=True)
                 all_items.append({"source_url": url, "error": "pool_timeout"})
+
+    total_valid = sum(1 for it in all_items if "error" not in it)
+    total_error = sum(1 for it in all_items if "error" in it)
+    print(f"[fetch_rss] 汇总: {len(source_urls)} 个源 → {total_valid} 条有效, {total_error} 个错误", flush=True)
 
     return all_items
 

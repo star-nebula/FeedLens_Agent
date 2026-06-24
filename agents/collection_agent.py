@@ -24,13 +24,10 @@ from utils.llm_provider import DeepSeekProvider
 # ============================================================
 
 DEFAULT_RSS_SOURCES = [
-    "https://rsshub.app/solidot/",
-    "https://rsshub.app/36kr/information/web_news/",
-    "https://rsshub.app/36kr/news/latest",
-    "https://rsshub.app/zhihu/daily",
-    "https://rsshub.app/v2ex/topics/latest",
-    "https://feeds.bbci.co.uk/news/technology/rss.xml",
-    "https://rsshub.app/github/trending/daily",
+    "https://36kr.com/feed",                        # 36氪资讯（直连）
+    "https://sspai.com/feed",                       # 少数派（直连）
+    "https://www.ruanyifeng.com/blog/atom.xml",     # 阮一峰周刊（直连）
+    "https://www.solidot.org/index.rss",            # Solidot（直连）
 ]
 
 # ============================================================
@@ -412,9 +409,12 @@ def run_collection_pipeline(state: FeedLensState) -> dict:
     except Exception as e:
         print(f"[collection_pipeline] fetch_rss 失败: {e}", flush=True)
 
-    # Step 2: search_web 补充（仅当 RSS 不足阈值时规则触发）
-    if len(collected_items) < search_threshold:
-        print(f"[collection_pipeline] Step 2: search_web 补充（当前仅 {len(collected_items)} 条，阈值={search_threshold}）", flush=True)
+    # Step 2: search_web 补充（RSS 不足阈值 或 来源数 < 3 时触发）
+    source_count = len(set(it.get("source_url", "") for it in collected_items))
+    need_search = len(collected_items) < search_threshold or source_count < 3
+    if need_search:
+        reason = f"当前仅 {len(collected_items)} 条（{source_count} 个来源）" if source_count < 3 else f"当前仅 {len(collected_items)} 条"
+        print(f"[collection_pipeline] Step 2: search_web 补充（{reason}，阈值={search_threshold}）", flush=True)
         try:
             search_result = tool_registry.dispatch("search_web", {"query": query})
             search_items = search_result.get("items", [])

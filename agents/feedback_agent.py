@@ -30,6 +30,23 @@ EMA_ALPHA = 0.3
 FEEDBACK_BIAS = {"like": 0.15, "dislike": -0.10, "irrelevant": -0.15}
 MIN_PREFERENCE_WEIGHT = 0.1  # P1: 可通过 ranking.preference_cleanup_threshold 覆盖
 
+# 从 EmbeddingModel 动态获取向量维度（避免硬编码）
+_EMBEDDING_DIM: int | None = None
+
+
+def _get_embedding_dim() -> int:
+    """获取当前 embedding 模型的输出维度（延迟加载，缓存结果）。"""
+    global _EMBEDDING_DIM
+    if _EMBEDDING_DIM is None:
+        try:
+            from utils.embedding import EmbeddingModel
+            emb = EmbeddingModel()
+            emb.load()
+            _EMBEDDING_DIM = emb._model.get_sentence_embedding_dimension()
+        except Exception:
+            _EMBEDDING_DIM = 384  # bge-small-zh-v1.5 默认维度
+    return _EMBEDDING_DIM
+
 
 # ============================================================
 # 辅助函数
@@ -178,6 +195,18 @@ def update_preference_node(state: FeedLensState) -> dict:
     # 生成反馈向量（使用关键词的嵌入）
     feedback_vector = _generate_keyword_vector(vs, keywords)
 
+    # 维度安全检查：确保所有向量维度一致，防止 EMA 计算崩溃
+    expected_dim = _get_embedding_dim()
+    if len(feedback_vector) != expected_dim:
+        print(f"[update_preference] feedback_vector 维度异常: {len(feedback_vector)} != {expected_dim}，跳过", flush=True)
+        return {"preference_updated": False}
+    if len(current_like) != expected_dim:
+        print(f"[update_preference] current_like 维度不匹配: {len(current_like)} != {expected_dim}，重置为零向量", flush=True)
+        current_like = [0.0] * expected_dim
+    if len(current_dislike) != expected_dim:
+        print(f"[update_preference] current_dislike 维度不匹配: {len(current_dislike)} != {expected_dim}，重置为零向量", flush=True)
+        current_dislike = [0.0] * expected_dim
+
     # EMA 更新
     new_like = current_like
     new_dislike = current_dislike
@@ -206,36 +235,49 @@ def update_preference_node(state: FeedLensState) -> dict:
 
 
 def _get_preference_vector(vs: VectorStore, user_id: int, pref_type: str) -> list:
-    """获取用户当前偏好向量（v_like 或 v_dislike）。"""
+    """获取用户当前偏好向量（v_like 或 v_dislike）。
+
+    如果 ChromaDB 中存储的向量维度与当前模型不一致（如旧数据是 512 维），
+    自动返回零向量，避免 EMA 更新时维度不匹配崩溃。
+    """
+    expected_dim = _get_embedding_dim()
     try:
-        results = vs.client.get_or_create_collection(
+        col = vs.client.get_or_create_collection(
             vs.COLLECTION_USER_PREF,
             embedding_function=vs.chroma_embedding_fn,
-        ).query(
-            query_texts=[f"user_{user_id}_{pref_type}"],
-            n_results=1,
-            where={"user_id": user_id, "pref_type": pref_type},
         )
-        if results["ids"] and results["ids"][0]:
-            return results["embeddings"][0][0] if results["embeddings"] else []
-    except Exception:
-        pass
-    # 默认零向量（384维）
-    return [0.0] * 384
+        result = col.get(
+            ids=[f"user_{user_id}_{pref_type}"],
+            include=["embeddings"],
+        )
+        embeddings = result.get("embeddings") or []
+        if embeddings and len(embeddings) > 0 and embeddings[0]:
+            emb = embeddings[0]
+            # 维度检查：ChromaDB 中旧数据可能为 512 维，当前模型为 384 维
+            if len(emb) == expected_dim:
+                return list(emb)
+            else:
+                print(f"[feedback] 偏好向量维度不匹配: ChromaDB={len(emb)}, 模型={expected_dim}，"
+                      f"重置 user_{user_id}_{pref_type} 为零向量", flush=True)
+    except Exception as e:
+        print(f"[feedback] 读取偏好向量失败: {e}", flush=True)
+    return [0.0] * expected_dim
 
 
 def _generate_keyword_vector(vs: VectorStore, keywords: list) -> list:
     """生成关键词的嵌入向量。"""
+    expected_dim = _get_embedding_dim()
     if not keywords:
-        return [0.0] * 384
+        return [0.0] * expected_dim
     try:
         text = " ".join(keywords)
         if vs.chroma_embedding_fn:
-            return vs.chroma_embedding_fn([text])[0]
+            vec = vs.chroma_embedding_fn([text])[0]
+            return vec
         # 降级：随机向量
-        return np.random.randn(384).tolist()
+        return np.random.randn(expected_dim).tolist()
     except Exception:
-        return np.random.randn(384).tolist()
+        return np.random.randn(expected_dim).tolist()
 
 
 def _update_keyword_preference(db: Database, user_id: int, keyword: str, feedback_type: str):

@@ -63,10 +63,16 @@ class VectorStore:
         """初始化 3 个集合（幂等）。
 
         feed_items 集合使用 cosine 距离度量，确保 1 - distance 可直接得到余弦相似度。
+
+        自动检测维度不匹配：如果 ChromaDB 中已有集合的向量维度与当前 embedding 模型
+        不一致（如旧数据是 512 维，当前模型是 384 维），自动删除旧集合并重建。
         """
         kwargs = {}
         if self.chroma_embedding_fn is not None:
             kwargs["embedding_function"] = self.chroma_embedding_fn
+
+        # 获取当前 embedding 模型的目标维度
+        expected_dim = self._get_expected_embedding_dim()
 
         # 每个集合的 metadata，feed_items 需要指定 hnsw:space=cosine
         collections = [
@@ -79,6 +85,12 @@ class VectorStore:
             try:
                 if force_recreate:
                     self.client.delete_collection(name)
+                    print(f"[VectorStore] 强制重建集合: {name}", flush=True)
+
+                # 检查已存在集合的维度是否匹配
+                if expected_dim is not None and not force_recreate:
+                    self._check_and_fix_dimension_mismatch(name, expected_dim)
+
                 self._collections[name] = self.client.get_or_create_collection(
                     name=name,
                     metadata=metadata,
@@ -94,6 +106,47 @@ class VectorStore:
                     )
                 else:
                     raise
+
+    def _get_expected_embedding_dim(self) -> int | None:
+        """获取当前 embedding 模型的目标输出维度。"""
+        if self.embedding_fn is None:
+            return None
+        try:
+            # 用一条短文本编码一次获取维度
+            sample = self.embedding_fn(["test"])
+            if hasattr(sample, 'shape'):
+                return sample.shape[1] if len(sample.shape) > 1 else len(sample[0])
+            return len(sample[0])
+        except Exception:
+            return None
+
+    def _check_and_fix_dimension_mismatch(self, collection_name: str, expected_dim: int):
+        """检查集合中已有向量的维度是否匹配，不匹配则自动删除重建。"""
+        try:
+            existing_names = [c.name for c in self.client.list_collections()]
+        except Exception:
+            return
+
+        if collection_name not in existing_names:
+            return
+
+        try:
+            col = self.client.get_collection(collection_name)
+            result = col.get(limit=1, include=["embeddings"])
+            emb_list = result.get("embeddings") or []
+            if emb_list and len(emb_list) > 0:
+                emb = emb_list[0]
+                if len(emb) != expected_dim:
+                    print(f"[VectorStore] 维度不匹配: {collection_name} 现有 {len(emb)} 维, "
+                          f"模型 {expected_dim} 维，自动重建", flush=True)
+                    self.client.delete_collection(collection_name)
+        except Exception as e:
+            # 如果 get 失败（如 embedding function 冲突），也需要重建
+            print(f"[VectorStore] 检测 {collection_name} 维度失败: {e}，尝试重建", flush=True)
+            try:
+                self.client.delete_collection(collection_name)
+            except Exception:
+                pass
 
     def get_collection(self, name: str) -> chromadb.Collection:
         """获取已初始化的集合。"""
