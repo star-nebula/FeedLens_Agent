@@ -189,7 +189,9 @@ def render():
                 # expander 与删除按钮并排：expander 占绝大部分，删除按钮右对齐
                 exp_col, del_col = st.columns([20, 1])
                 with exp_col:
-                    with st.expander(f"📄 简报数量：{item_count}  |  {created_at_display}  |  质量分：{quality_score:.2f}", expanded=False):
+                    # 简报标题优先显示，无标题时回退为"简报数量"
+                    brief_title = brief_json.get("title", "") or f"简报（{item_count}条）"
+                    with st.expander(f"📄 {created_at_display}  |  {brief_title}  |  质量分：{quality_score:.2f}", expanded=False):
                         # 构建 item_id → db_item 映射
                         item_map = {}
                         for item in items:
