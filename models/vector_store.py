@@ -38,26 +38,53 @@ class BgeEmbeddingFunction(EmbeddingFunction):
 
 
 class VectorStore:
-    """ChromaDB 封装：持久化存储 + 3 集合管理 + CRUD 操作。"""
+    """ChromaDB 封装：持久化存储 + 3 集合管理 + CRUD 操作。
+
+    单例模式（per persist_dir）：同一个持久化目录只维护一个 VectorStore 实例。
+    这确保了 BgeEmbeddingFunction 实例唯一，避免 ChromaDB 检测到 embedding
+    function 的 Python 对象 identity 不同而触发 "embedding function conflict"
+    → delete_collection → 历史数据全部丢失。
+    """
+
+    _instances: dict[str, "VectorStore"] = {}
 
     COLLECTION_FEED_ITEMS = "feed_items"
     COLLECTION_USER_PREF = "user_preference"
     COLLECTION_DOMAIN_KNOWLEDGE = "domain_knowledge"
+
+    def __new__(
+        cls,
+        persist_dir: str = "data/chroma",
+        embedding_fn: Optional[Callable] = None,
+    ):
+        # 以 persist_dir 的绝对路径为 key，确保同一个目录只有一个实例
+        abs_dir = os.path.abspath(persist_dir)
+        if abs_dir not in cls._instances:
+            instance = super().__new__(cls)
+            instance._singleton_initialized = False
+            cls._instances[abs_dir] = instance
+        return cls._instances[abs_dir]
 
     def __init__(
         self,
         persist_dir: str = "data/chroma",
         embedding_fn: Optional[Callable] = None,
     ):
-        self.persist_dir = persist_dir
-        os.makedirs(persist_dir, exist_ok=True)
+        if self._singleton_initialized:
+            # 单例已初始化，静默忽略重复调用
+            return
 
-        self.client = chromadb.PersistentClient(path=persist_dir)
+        abs_dir = os.path.abspath(persist_dir)
+        self.persist_dir = abs_dir
+        os.makedirs(abs_dir, exist_ok=True)
+
+        self.client = chromadb.PersistentClient(path=abs_dir)
         self.embedding_fn = embedding_fn
         self.chroma_embedding_fn = None
         if embedding_fn is not None:
             self.chroma_embedding_fn = BgeEmbeddingFunction(embedding_fn)
         self._collections: dict[str, chromadb.Collection] = {}
+        self._singleton_initialized = True
 
     def init_collections(self, force_recreate: bool = False):
         """初始化 3 个集合（幂等）。
@@ -98,12 +125,12 @@ class VectorStore:
                 )
             except ValueError as e:
                 if "embedding function conflict" in str(e).lower():
-                    self.client.delete_collection(name)
-                    self._collections[name] = self.client.create_collection(
-                        name=name,
-                        metadata=metadata,
-                        **kwargs,
-                    )
+                    # 🔧 单例模式下不应再出现此错误，但保留防御逻辑：
+                    # 不删除已有集合（会导致历史数据丢失），改为不带
+                    # embedding_function 参数获取已有集合，只用于查询。
+                    print(f"[VectorStore] ⚠️ embedding function conflict on '{name}', "
+                          f"fallback to get_collection (数据不会丢失)", flush=True)
+                    self._collections[name] = self.client.get_collection(name)
                 else:
                     raise
 

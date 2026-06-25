@@ -108,7 +108,12 @@ PLANNER_SYSTEM_PROMPT = """你是 FeedLens 的编排 Planner。根据当前 Agen
 }
 
 params 可选值：search_expand(含 query), retry, rerank, expand_threshold 等。空对象表示标准执行。
-注意：expand_threshold 仅对 Ranking 有效，表示放宽排序截断门槛，把更多已采集条目纳入简报。"""
+注意：expand_threshold 仅对 Ranking 有效，表示放宽排序截断门槛，把更多已采集条目纳入简报。
+
+## 输出约束（必须遵守）
+- reason 字段只能使用纯文本中文，禁止使用引号（包括中文引号""和英文引号\"）、换行符、反斜杠
+- 整个响应必须是合法 JSON，不要添加 markdown 代码块标记
+- 如果 reason 需要引用内容，用书名号《》代替引号"""
 
 
 # ============================================================
@@ -369,15 +374,80 @@ def _build_planner_context(state: FeedLensState) -> dict:
     }
 
 def _parse_planner_response(text: str) -> dict:
-    """从 LLM 响应中解析编排计划 JSON，失败则抛异常。"""
+    """从 LLM 响应中解析编排计划 JSON，多层容错降级。
+
+    DeepSeek 有时在 reason 字段输出未转义的特殊字符（中文引号、换行等）
+    导致 JSON 格式非法。此处采用三层降级策略：
+      Layer 1: 直接 json.loads
+      Layer 2: regex 提取 {...} 后清洗常见 JSON 错误再解析
+      Layer 3: 逐字段提取关键信息（最后防线）
+    全部失败则抛异常，由外层 _fallback_plan 兜底。
+    """
     import re as _re
+
+    # --- Layer 1: 直接解析 ---
+    try:
+        plan = json.loads(text)
+        if isinstance(plan.get("sub_agent_plan"), list):
+            return plan
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # --- Layer 2: regex 提取 + 清洗 ---
     match = _re.search(r'\{[\s\S]*\}', text)
     json_str = match.group() if match else text
-    plan = json.loads(json_str)
-    # 校验必要字段
-    if not isinstance(plan.get("sub_agent_plan"), list):
-        raise ValueError("sub_agent_plan 不是列表")
-    return plan
+
+    # 清洗常见的 LLM JSON 格式问题：
+    # a) reason 字段中未转义的双引号（如中文引号"..."在 JSON 字符串内）
+    #    先找到 "reason": 后的字符串值，对其内部做转义
+    # b) 尾部多余逗号（{"a": 1,}）
+    # c) 单引号 JSON
+    cleaned = json_str
+
+    # 修复尾部多余逗号
+    cleaned = _re.sub(r',\s*([}\]])', r'\1', cleaned)
+
+    # 尝试将单引号 JSON 转为双引号（DeepSeek 偶尔输出单引号）
+    if cleaned.startswith("{'") or "{'" in cleaned:
+        cleaned = cleaned.replace("'", '"')
+        # 修复 True/False/None 被错误转义
+        cleaned = _re.sub(r'"True"', 'true', cleaned)
+        cleaned = _re.sub(r'"False"', 'false', cleaned)
+        cleaned = _re.sub(r'"None"', 'null', cleaned)
+
+    try:
+        plan = json.loads(cleaned)
+        if isinstance(plan.get("sub_agent_plan"), list):
+            return plan
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    # --- Layer 3: 逐字段提取（最后防线）---
+    # 尝试从非标准 JSON 中提取 sub_agent_plan 数组
+    plan_match = _re.search(
+        r'"sub_agent_plan"\s*:\s*(\[[^\]]*\])',
+        json_str,
+    )
+    if plan_match:
+        try:
+            sub_plan = json.loads(plan_match.group(1))
+            if isinstance(sub_plan, list):
+                # 尝试提取 reason
+                reason_match = _re.search(r'"reason"\s*:\s*"([^"]*)"', json_str)
+                reason = reason_match.group(1) if reason_match else ""
+                push_match = _re.search(r'"push_immediate"\s*:\s*(true|false)', json_str, _re.IGNORECASE)
+                push_immediate = push_match.group(1).lower() == "true" if push_match else False
+                return {
+                    "sub_agent_plan": sub_plan,
+                    "reason": reason,
+                    "push_immediate": push_immediate,
+                }
+        except (json.JSONDecodeError, TypeError):
+            pass
+
+    # 全部失败，抛出异常让外层 fallback
+    raise ValueError(f"无法解析 planner 响应: {text[:200]}")
+
 
 
 def _fallback_plan(state: FeedLensState) -> dict:

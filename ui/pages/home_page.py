@@ -7,6 +7,7 @@ import subprocess
 import sys
 import os
 import json
+import re
 import threading
 from datetime import datetime, timezone, timedelta
 from models.database import Database
@@ -119,6 +120,64 @@ def _delete_brief(brief_id: int):
         conn.execute("DELETE FROM briefs WHERE id = ?", (brief_id,))
 
 
+def _ui_clean_summary(text: str, max_chars: int = 200) -> str:
+    """UI 层摘要清洗：去除噪音 + 智能截断（最后一道防线）。
+
+    处理：
+      - 去除作者署名（文｜XXX、编辑｜XXX 等）
+      - 去除"查看全文"/"阅读全文"尾缀
+      - 去除 HTML 标签和残留碎片（如 <img）
+      - 去除图片来源说明
+      - 智能截断：优先在句号处断开
+    """
+    if not text:
+        return text
+
+    # 1. 去除 HTML 标签
+    cleaned = re.sub(r'<[^>]+>', '', text)
+    # 2. 去除不完整的 HTML 残留
+    cleaned = re.sub(r'<\w+[^>]*$', '', cleaned)
+    cleaned = re.sub(r'<\w+\b(?!\s*=)[^>]{0,50}(?![^<]*>)', '', cleaned)
+    # 3. 还原 HTML 实体
+    import html as _html
+    cleaned = _html.unescape(cleaned)
+    # 4. 去除作者署名模式
+    cleaned = re.sub(r'[文编]\s*[｜|/]\s*\S{1,20}', '', cleaned)
+    cleaned = re.sub(r'编辑\s*[｜|/]\s*\S{1,20}', '', cleaned)
+    cleaned = re.sub(r'作者\s*[：:]\s*\S{1,20}', '', cleaned)
+    # 5. 去除"查看全文"等尾缀
+    cleaned = re.sub(r'[（(]?查看全文[）)]?', '', cleaned)
+    cleaned = re.sub(r'[（(]?阅读全文[）)]?', '', cleaned)
+    cleaned = re.sub(r'[（(]?展开全文[）)]?', '', cleaned)
+    # 6. 去除图片来源标记
+    cleaned = re.sub(r'图片[来源：:]\s*\S{1,50}', '', cleaned)
+    cleaned = re.sub(r'[（(]图[^）)]*[）)]', '', cleaned)
+    # 7. 清理多余空白
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip('，,。；;； ')
+
+    # 8. 智能截断
+    if len(cleaned) > max_chars:
+        truncated = cleaned[:max_chars]
+        last_period = max(
+            truncated.rfind('。'), truncated.rfind('？'), truncated.rfind('！'),
+            truncated.rfind('.'), truncated.rfind('?'), truncated.rfind('!'),
+        )
+        if last_period > max_chars * 0.6:
+            cleaned = truncated[:last_period + 1]
+        else:
+            last_break = max(
+                truncated.rfind('，'), truncated.rfind(','),
+                truncated.rfind('；'), truncated.rfind(';'),
+                truncated.rfind(' '),
+            )
+            if last_break > max_chars * 0.6:
+                cleaned = truncated[:last_break] + '...'
+            else:
+                cleaned = truncated + '...'
+
+    return cleaned
+
+
 def render():
     """渲染首页。"""
     st.title("📰 首页")
@@ -211,6 +270,7 @@ def render():
                         # 简报摘要
                         summary = brief_json.get("summary", "")
                         if summary:
+                            summary = _ui_clean_summary(summary, max_chars=150)
                             st.markdown(f"> {summary}")
                         st.markdown("")
 
@@ -232,6 +292,7 @@ def render():
                             # 摘要
                             item_summary = entry.get("summary", "")
                             if item_summary:
+                                item_summary = _ui_clean_summary(item_summary, max_chars=200)
                                 st.caption(f"摘要: {item_summary}")
 
                             # 链接

@@ -92,7 +92,8 @@ def _build_briefing_prompt(items: List[Dict], goal_text: str) -> str:
     items_text = []
     for i, item in enumerate(items):
         raw_summary = item.get('summary', '') or ''
-        clean_summary = _strip_html(raw_summary)[:500]
+        # 🔧 清洗原始摘要：去除 HTML、作者署名、查看全文等噪音
+        clean_summary = _clean_summary(raw_summary, max_chars=300)
         items_text.append(
             f"[{item.get('id', f'item_{i}')}] {item.get('title', '')}\n"
             f"  摘要: {clean_summary}\n"
@@ -112,9 +113,12 @@ def _build_briefing_prompt(items: List[Dict], goal_text: str) -> str:
 
 ## 输出要求
 
-1. title：简报标题，简洁有力
-2. summary：简报摘要，100字以内
+1. title：简报标题，简洁有力，不超过20字
+2. summary：简报整体摘要，**严格限制在150字以内**，只概括核心新闻要点，不得包含作者署名、编辑信息、来源声明
 3. items：将所有条目包含在 items 数组中，每条保留完整信息（id, title, summary, source, published_at, importance, url）
+   - 每条 item.summary 必须是该条新闻的**核心内容概括**，**严格限制在200字以内**
+   - item.summary 中**禁止**出现：作者署名（如"文｜XXX"）、编辑信息、"查看全文"、"阅读原文"、HTML标签、图片来源说明
+   - 如果原始摘要包含上述噪音，请自行提炼核心内容，不要原样复制
 4. 条目数量 = {len(items)}，不允许丢弃任何条目
 5. generated_at：当前时间，ISO 格式
 
@@ -141,16 +145,88 @@ import html as _html
 
 
 def _strip_html(text: str) -> str:
-    """去除 HTML 标签，将 &amp; &lt; &gt; 等实体还原为普通字符。"""
+    """去除 HTML 标签和残留碎片，将 &amp; &lt; &gt; 等实体还原为普通字符。"""
     if not text:
         return text
     import re as _re
-    # 先去除 HTML 标签
+    # 先去除完整 HTML 标签
     cleaned = _re.sub(r'<[^>]+>', '', text)
-    # 再还原 HTML 实体
+    # 去除不完整的 HTML 残留（如 <img、<br 等无闭合的标签片段）
+    cleaned = _re.sub(r'<\w+[^>]*$', '', cleaned)
+    cleaned = _re.sub(r'<\w+\b(?!\s*=)[^>]{0,50}(?![^<]*>)', '', cleaned)
+    # 还原 HTML 实体
     cleaned = _html.unescape(cleaned)
     # 合并多余空白
     cleaned = _re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
+
+def _clean_summary(text: str, max_chars: int = 200) -> str:
+    """清洗摘要文本：去除噪音内容（作者署名、查看全文等）+ 智能截断。
+
+    噪音模式（正则匹配去除）：
+      - 文｜XXX 编辑｜XXX（中文作者署名格式）
+      - 查看全文、阅读全文、展开全文 等无意义尾缀
+      - 作者：XXX / 文/XXX / 来源：XXX 等元信息（摘要中不应出现）
+      - HTML 残留标签和实体
+      - 连续标点/空格
+    """
+    if not text:
+        return text
+    import re as _re
+
+    # 1. 先去除 HTML 标签
+    cleaned = _strip_html(text)
+
+    # 2. 去除作者署名模式
+    cleaned = _re.sub(r'[文编]\s*[｜|/]\s*\S{1,20}', '', cleaned)  # 文｜XXX 或 编/XXX
+    cleaned = _re.sub(r'编辑\s*[｜|/]\s*\S{1,20}', '', cleaned)    # 编辑｜XXX
+    cleaned = _re.sub(r'作者\s*[：:]\s*\S{1,20}', '', cleaned)     # 作者：XXX
+    cleaned = _re.sub(r'撰文\s*[：:]\s*\S{1,20}', '', cleaned)     # 撰文：XXX
+
+    # 3. 去除"查看全文"/"阅读全文"等无意义尾缀
+    cleaned = _re.sub(r'[（(]?查看全文[）)]?', '', cleaned)
+    cleaned = _re.sub(r'[（(]?阅读全文[）)]?', '', cleaned)
+    cleaned = _re.sub(r'[（(]?展开全文[）)]?', '', cleaned)
+    cleaned = _re.sub(r'[（(]?点击阅读[）)]?', '', cleaned)
+
+    # 4. 去除图片来源/转载标记
+    cleaned = _re.sub(r'图片[来源：:]\s*\S{1,50}', '', cleaned)
+    cleaned = _re.sub(r'[（(]图[^）)]*[）)]', '', cleaned)
+
+    # 5. 清理多余空白和标点
+    cleaned = _re.sub(r'\s+', ' ', cleaned)
+    cleaned = _re.sub(r'[。，,；;]{2,}', lambda m: m.group()[0], cleaned)  # 重复标点去重
+    cleaned = cleaned.strip('，,。；;； ')
+
+    # 6. 智能截断：优先在句号处截断，避免断在词中
+    if len(cleaned) > max_chars:
+        truncated = cleaned[:max_chars]
+        # 尝试在最后一个句号/问号/感叹号处截断
+        last_period = max(
+            truncated.rfind('。'),
+            truncated.rfind('？'),
+            truncated.rfind('！'),
+            truncated.rfind('.'),
+            truncated.rfind('?'),
+            truncated.rfind('!'),
+        )
+        if last_period > max_chars * 0.6:  # 至少保留 60% 内容
+            cleaned = truncated[:last_period + 1]
+        else:
+            # 尝试在最后一个逗号/空格处截断
+            last_break = max(
+                truncated.rfind('，'),
+                truncated.rfind(','),
+                truncated.rfind('；'),
+                truncated.rfind(';'),
+                truncated.rfind(' '),
+            )
+            if last_break > max_chars * 0.6:
+                cleaned = truncated[:last_break] + '...'
+            else:
+                cleaned = truncated + '...'
+
     return cleaned
 
 
@@ -165,9 +241,9 @@ def _backfill_briefing_items(briefing: Dict[str, Any], item_index: Dict[str, Dic
             orig_field = "_score" if field == "final_score" else field
             orig_val = orig.get(orig_field)
             if orig_val not in (None, "", []):
-                # summary 回填时清理 HTML 标签
+                # summary 回填时做完整清洗（HTML + 作者署名 + 查看全文等噪音）
                 if field == "summary" and isinstance(orig_val, str):
-                    orig_val = _strip_html(orig_val)
+                    orig_val = _clean_summary(orig_val, max_chars=300)
                 cur = item.get(field)
                 if cur in (None, "", []):
                     item[field] = orig_val
@@ -175,6 +251,9 @@ def _backfill_briefing_items(briefing: Dict[str, Any], item_index: Dict[str, Dic
                     # BUG-001: published_at 也需强制覆盖（LLM 可能生成不准确的日期）
                     if isinstance(orig_val, (int, float)) or field in ("source", "url", "published_at"):
                         item[field] = orig_val
+                    # 🔧 对 summary 字段：即使 LLM 已生成，也做清洗去除噪音
+                    elif field == "summary" and isinstance(item.get(field), str):
+                        item[field] = _clean_summary(item[field], max_chars=200)
             elif item.get(field) in (None, "", []):
                 if field == "published_at":
                     item[field] = "未知时间"
@@ -251,6 +330,8 @@ def _render_markdown(briefing: Dict[str, Any]) -> str:
     lines = [f"# {briefing.get('title', '简报')}", ""]
     summary = briefing.get('summary', '')
     if summary:
+        # 🔧 渲染时再次清洗截断（最后一道防线）
+        summary = _clean_summary(summary, max_chars=150)
         lines.append(f"> {summary}")
         lines.append("")
     for item in briefing.get("items", []):
@@ -260,6 +341,8 @@ def _render_markdown(briefing: Dict[str, Any]) -> str:
         # 摘要
         item_summary = item.get('summary', '')
         if item_summary:
+            # 🔧 渲染时再次清洗截断（最后一道防线）
+            item_summary = _clean_summary(item_summary, max_chars=200)
             lines.append(f"摘要: {item_summary}")
             lines.append("")
         # 链接
@@ -481,10 +564,11 @@ def generate_briefing_node(state: FeedLensState) -> dict:
         # 增强 fallback 简报，所有条目平铺展示
         fallback_items = []
         for idx, item in enumerate(items_to_show):
+            raw_s = item.get("summary", "") or item.get("content", "") or ""
             entry = {
                 "id": item.get("id", f"fallback_{idx}"),
                 "title": item.get("title", ""),
-                "summary": (item.get("summary", "") or item.get("content", ""))[:500],
+                "summary": _clean_summary(raw_s, max_chars=200),
                 "source": item.get("source", item.get("source_name", "unknown")),
                 "published_at": item.get("published_at", ""),
                 "importance": item.get("importance", 3),
@@ -506,6 +590,15 @@ def generate_briefing_node(state: FeedLensState) -> dict:
             "items": fallback_items,
             "generated_at": datetime.now().isoformat(),
         }
+    else:
+        # 🔧 JSON 解析成功后，对所有 summary 做后清洗
+        # LLM 可能不遵守长度限制，此处做最终兜底清洗
+        if briefing.get("summary"):
+            briefing["summary"] = _clean_summary(briefing["summary"], max_chars=150)
+        for item in briefing.get("items", []):
+            if item.get("summary"):
+                item["summary"] = _clean_summary(item["summary"], max_chars=200)
+
     item_index = _build_item_index(items_to_show)
     _backfill_briefing_items(briefing, item_index)
     markdown = _render_markdown(briefing)
