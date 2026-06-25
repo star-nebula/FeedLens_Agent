@@ -399,7 +399,9 @@ def deduplicate(
 
     duplicate_set = set()
     duplicate_pairs = []
-    llm_adjudicated = 0
+
+    # === 阶段1: 高阈值直接判重 + 收集中间区间待裁决 pair ===
+    pending_adjudications = []  # 待批量裁决的 pair
 
     for pair in pairs:
         i, j = pair["item_a_index"], pair["item_b_index"]
@@ -409,6 +411,7 @@ def deduplicate(
         score = pair["similarity_score"]
 
         if score >= threshold_high:
+            # 高区间：直接判重（无 LLM）
             duplicate_set.add(j)
             duplicate_pairs.append({
                 "item_a_id": items[i]["id"],
@@ -418,30 +421,54 @@ def deduplicate(
                 "relation_type": "duplicate",
             })
         elif threshold_low <= score < threshold_high:
-            if llm_adjudicated < max_llm_adjudications:
-                is_duplicate = llm_adjudicate_duplicate(
-                    items[i], items[j], score, llm_provider
-                )
-                llm_adjudicated += 1
+            # 中间区间：收集待批量裁决
+            pending_adjudications.append({
+                "item_a_index": i,
+                "item_b_index": j,
+                "item_a": items[i],
+                "item_b": items[j],
+                "similarity_score": score,
+            })
 
-                if is_duplicate:
-                    duplicate_set.add(j)
-                    duplicate_pairs.append({
-                        "item_a_id": items[i]["id"],
-                        "item_b_id": items[j]["id"],
-                        "similarity_score": score,
-                        "dedup_method": "llm_adjudication",
-                        "relation_type": "duplicate",
-                    })
-            else:
+    # === 阶段2: 批量 LLM 裁决（一次请求处理所有中间区间 pair） ===
+    if pending_adjudications and llm_provider is not None:
+        # 受 max_llm_adjudications 限制
+        batch = pending_adjudications[:max_llm_adjudications]
+        overflow = pending_adjudications[max_llm_adjudications:]
+
+        # 批量裁决
+        batch_results = llm_adjudicate_duplicates_batch(batch, llm_provider)
+
+        # 应用批量裁决结果
+        for pair_info, is_duplicate in zip(batch, batch_results):
+            i, j = pair_info["item_a_index"], pair_info["item_b_index"]
+            score = pair_info["similarity_score"]
+            if i in duplicate_set or j in duplicate_set:
+                continue
+            if is_duplicate:
                 duplicate_set.add(j)
                 duplicate_pairs.append({
                     "item_a_id": items[i]["id"],
                     "item_b_id": items[j]["id"],
                     "similarity_score": score,
-                    "dedup_method": "hard_limit",
+                    "dedup_method": "llm_adjudication",
                     "relation_type": "duplicate",
                 })
+
+        # 超限部分：硬判为重复
+        for pair_info in overflow:
+            i, j = pair_info["item_a_index"], pair_info["item_b_index"]
+            score = pair_info["similarity_score"]
+            if i in duplicate_set or j in duplicate_set:
+                continue
+            duplicate_set.add(j)
+            duplicate_pairs.append({
+                "item_a_id": items[i]["id"],
+                "item_b_id": items[j]["id"],
+                "similarity_score": score,
+                "dedup_method": "hard_limit",
+                "relation_type": "duplicate",
+            })
 
     unique_items = [item for idx, item in enumerate(items) if idx not in duplicate_set]
 
@@ -465,7 +492,7 @@ def llm_adjudicate_duplicate(
     similarity_score: float,
     llm_provider: LLMProvider,
 ) -> bool:
-    """LLM 裁决两条目是否重复。"""
+    """LLM 裁决两条目是否重复（逐对调用，保留兼容）。"""
     prompt = f"""以下两条新闻条目，向量相似度为 {similarity_score:.4f}。请判断它们是否属于同一事件的重复报道。
 
 条目A: {item_a['title']}
@@ -481,6 +508,77 @@ def llm_adjudicate_duplicate(
         return "YES" in response.upper()
     except Exception:
         return True
+
+
+def llm_adjudicate_duplicates_batch(
+    pairs: List[Dict[str, Any]],
+    llm_provider: LLMProvider,
+) -> List[bool]:
+    """批量 LLM 裁决：一次请求判断多对条目是否重复。
+
+    将中间区间的所有待裁决 pair 打包成一次 LLM 调用，
+    大幅减少 HTTP 往返次数（从 N 次降为 1 次）。
+
+    Args:
+        pairs: 待裁决列表，每项含 item_a, item_b, similarity_score
+        llm_provider: LLM Provider 实例
+
+    Returns:
+        List[bool]: 与 pairs 同长度的裁决结果列表，True=重复
+    """
+    if not pairs:
+        return []
+
+    # 构建批量裁决 prompt
+    pairs_text = ""
+    for idx, pair in enumerate(pairs):
+        item_a = pair["item_a"]
+        item_b = pair["item_b"]
+        score = pair["similarity_score"]
+        pairs_text += (
+            f"--- 第 {idx + 1} 对（相似度={score:.4f}）---\n"
+            f"条目A标题: {item_a.get('title', '')}\n"
+            f"条目B标题: {item_b.get('title', '')}\n"
+            f"条目A摘要: {(item_a.get('summary', '') or '')[:300]}\n"
+            f"条目B摘要: {(item_b.get('summary', '') or '')[:300]}\n\n"
+        )
+
+    prompt = f"""请判断以下 {len(pairs)} 对新闻条目是否属于同一事件的重复报道。
+
+{pairs_text}请以 JSON 数组格式回答，每个元素为 true（重复）或 false（不重复）。
+例如：[true, false, true, ...]
+只输出 JSON 数组，不要输出其他内容。"""
+
+    try:
+        response = llm_provider.chat([{"role": "user", "content": prompt}])
+        # 尝试解析 JSON 数组
+        import re
+        json_match = re.search(r'\[[\s\S]*\]', response.strip())
+        if json_match:
+            import json
+            results = json.loads(json_match.group())
+            # 确保长度匹配
+            if len(results) == len(pairs):
+                return [bool(r) for r in results]
+            # 长度不匹配时，按逐对兜底（不应出现）
+            print(f"[dedup_batch] 警告: LLM 返回 {len(results)} 个结果，期望 {len(pairs)} 个，逐对兜底", flush=True)
+        else:
+            print(f"[dedup_batch] 警告: 无法解析 JSON，逐对兜底", flush=True)
+    except Exception as e:
+        print(f"[dedup_batch] 批量裁决异常: {e}，逐对兜底", flush=True)
+
+    # 兜底：逐对调用
+    results = []
+    for pair in pairs:
+        try:
+            is_dup = llm_adjudicate_duplicate(
+                pair["item_a"], pair["item_b"],
+                pair["similarity_score"], llm_provider
+            )
+            results.append(is_dup)
+        except Exception:
+            results.append(True)
+    return results
 
 
 # ====================
