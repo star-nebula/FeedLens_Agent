@@ -29,7 +29,7 @@ MCP Client（stdio 传输）
 │    ├─ 构建通知对象：                                      │
 │    │    {                                               │
 │    │      user_id,                                      │
-│    │      brief (含 title/summary/categories/markdown), │
+│    │      brief (含 title/summary/items/_markdown),     │
 │    │      immediate (是否紧急推送),                       │
 │    │      pushed_at (ISO 时间戳),                        │
 │    │      read: false                                   │
@@ -61,7 +61,7 @@ Streamlit 前端读取 notifications.jsonl → 渲染展示
 | 优先级 | 内容 | 说明 |
 |--------|------|------|
 | 1 | `briefing._markdown` | 简报的完整 Markdown 渲染版本 |
-| 2 | `briefing` (JSON) | 结构化 JSON，含 title/summary/categories |
+| 2 | `briefing` (JSON) | 结构化 JSON，含 title/summary/items |
 | 3 | `ranked_items` 摘要 | 无简报时的降级方案（top 5 标题+链接） |
 
 ---

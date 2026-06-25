@@ -43,6 +43,10 @@ Tool Registry 负责：
 │  │  write_memory       写入决策经验             │      │
 │  └────────────────────────────────────────────┘      │
 │                                                      │
+│  ┌─ briefing_legacy（不暴露给 LLM，代码层调用）─┐     │
+│  │  quality_check    四维质量审查                │      │
+│  └────────────────────────────────────────────┘      │
+│                                                      │
 │  ┌─ common（所有阶段可见）────────────────────┐      │
 │  │  finish_task   标记当前阶段完成              │      │
 │  └────────────────────────────────────────────┘      │
@@ -108,7 +112,8 @@ LLM 返回 function_call → tool_registry.dispatch(tool_name, arguments)
 | `normalize_items` | `items` | Collection Agent |
 | `deduplicate` | `items` | Ranking Agent |
 | `rank_items` | `items, user_id, feedback_history, goal_embedding` | Ranking Agent |
-| `generate_briefing` | `items, goal_text, categories` | Briefing Agent |
+| `generate_briefing` | `items, goal_text` | Briefing Agent |
+| `quality_check` | `briefing, ranked_items, goal_text` | 代码层直接调用（不经过 LLM） |
 
 这样设计的好处：LLM 不需要知道底层数据细节，只需要表达"我想执行这个操作"即可。
 
@@ -128,4 +133,4 @@ LLM 返回 function_call → tool_registry.dispatch(tool_name, arguments)
 
 ## 一句话总结
 
-> 12 个工具按 phase 分为 4 组（collection / ranking / briefing / main），子 Agent 只能访问自己阶段的工具，参数由系统自动注入，通过统一的 dispatch 分发执行。
+> 15 个工具按 phase 分为 6 组（collection=4 / ranking=2 / briefing=1 / main=4 / briefing_legacy=1 / common=1 + finish_task），子 Agent 只能访问自己阶段的工具，参数由系统自动注入，通过统一的 dispatch 分发执行。

@@ -21,12 +21,12 @@ Main Agent 是整个 FeedLens 的**核心大脑**，负责：
 understand_intent（意图理解）
   │
   ▼
-planner（LLM 编排决策）
+planner（LLM 编排决策 + 记忆注入）
   │
   ▼
-router_node（动态路由）
+router_node（规则优先 + LLM兜底）
   │
-  ├─→ invoke_sub_agent（执行子 Agent）
+  ├─→ invoke_sub_agent（执行子 Agent，run_with_isolation 隔离）
   │     ├─ Collection Agent
   │     ├─ Ranking Agent
   │     └─ Briefing Agent
@@ -46,7 +46,7 @@ router_node（动态路由）
   └─→ END / abort（结束 / 放弃）
 ```
 
-**ReAct 循环**：planner → invoke → observe → planner（最多 3 轮，未达标则重新编排）
+**ReAct 循环**：planner → invoke → observe → planner（最多 `config.yaml` `agents.max_react_cycles`=3 轮，未达标则重新编排）
 
 ---
 
@@ -64,7 +64,7 @@ router_node（动态路由）
 ### ② planner — LLM 编排决策（ReAct 的 Think 步骤）
 
 ```
-输入：当前状态摘要（采集量、排序质量、简报质量）+ 历史记忆
+输入：当前状态摘要（采集量、排序质量、简报质量）+ 记忆注入（情节记忆 + 长期记忆）
 输出：sub_agent_plan（下一步该调度哪些子 Agent）
 
 LLM 失败 → 回退到标准三板斧（Collection → Ranking → Briefing）
@@ -73,13 +73,23 @@ ReAct ≥ 2 轮 → 收敛模式（跳过采集，仅排序 → 简报）
 
 **8 种编排策略**：采集不足时搜索补充、排序差时 rerank、简报少时放宽门槛、质量不达标重试等。
 
-### ③ router_node — 动态路由决策
+### ③ router_node — 规则优先路由 + LLM兜底
 
 ```
-规则优先（8 种场景覆盖）→ LLM 兜底（仅 needs_retry / overall_pass=false 时需要）
+规则优先（覆盖 8 种确定性场景）→ LLM 兜底（仅在 planner 重新编排时需要）
+
+8 种规则场景：
+  plan 非空+未执行 → invoke_sub_agent
+  已执行+未观察 → observe_results
+  已观察+无需重试 → coordinator_reflect
+  已观察+需重试+未达上限 → planner（LLM 重新编排，唯一需要 LLM 的路由）
+  审查通过 → push_notification
+  审查不通过+未达上限 → planner（LLM 重新编排）
+  推送完成 → update_memory
+  超轮数/死循环 → 强制收敛到 update_memory
 
 防死循环：连续 3 次路由到同一节点 → 强制收敛
-硬兜底：agentic_turn_count ≥ max_turns（默认 5）→ 强制结束
+硬兜底：agentic_turn_count ≥ config.yaml agents.max_turns（默认 5）→ 强制结束
 ```
 
 ### ④ invoke_sub_agent — 执行子 Agent
@@ -128,9 +138,9 @@ ReAct ≥ 2 轮 → 收敛模式（跳过采集，仅排序 → 简报）
 ### ⑧ update_memory — 记忆写入
 
 ```
-1. 写入情节记忆（SQLite execution_logs + LLM 摘要 → ChromaDB）
+1. 写入情节记忆（SQLite execution_logs，近7天 + LLM 摘要 → ChromaDB 长期记忆）
 2. 写入 run_logs / briefs / briefing_items / deduped_items 表
-3. 更新 ChromaDB 偏好向量（top 3 条目正向偏好）
+3. 更新 ChromaDB 偏好向量（top 3 条目正向偏好，dislike 负向更新）
 4. 写入条目历史向量（用于下次采集的跨批次预过滤去重）
 ```
 
@@ -140,14 +150,15 @@ ReAct ≥ 2 轮 → 收敛模式（跳过采集，仅排序 → 简报）
 
 | 决策 | 做法 | 理由 |
 |------|------|------|
-| **规则优先路由** | 正常流程全部规则判断，仅重试/重排时需要 LLM | 节省 API 调用，避免 LLM 在确定性场景浪费 |
+| **规则优先路由** | 8 种确定性场景全部规则判断，仅 planner 重新编排时需要 LLM | 节省 API 调用，正常链路零 LLM 路由 |
 | **子 Agent 隔离执行** | `run_with_isolation` 包装，单失败不阻断 | 保证管线鲁棒性，一个环节失败不影响其他 |
+| **Planner 记忆注入** | 调用 `memory_manager.get_context()` 注入情节+长期记忆 | 让 LLM 编排时参考历史经验，避免重复决策 |
 | **死循环检测** | 连续 3 次同路由 + 轮数上限双重保护 | 防止 LLM 决策导致无限循环 |
-| **记忆系统双存储** | SQLite 存执行日志，ChromaDB 存语义记忆 | 结构化查询 + 语义检索互补 |
+| **记忆系统双存储** | SQLite 存执行日志（情节记忆），ChromaDB 存语义记忆（长期） | 结构化查询 + 语义检索互补 |
 | **跨批次预过滤** | update_memory 将条目向量写入 ChromaDB | 下次采集时向量比对，拦截历史重复条目 |
 
 ---
 
 ## 一句话总结
 
-> 意图理解 → LLM 编排计划 → 规则路由跳转 → 顺序执行 3 个子 Agent → 质量观察 → 不达标则重试（最多 3 轮）→ 综合审查 → 推送 → 记忆写入。
+> 意图理解 → LLM 编排计划（含记忆注入） → 规则路由跳转 → 顺序执行 3 个子 Agent（隔离执行）→ 质量观察 → 不达标则重试（最多 3 轮）→ 综合审查 → 推送 → 记忆写入。

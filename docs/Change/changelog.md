@@ -34,6 +34,7 @@
   - 新增 `_clean_summary` 函数，去除作者署名、查看全文、HTML 标签等噪音
   - 智能截断，优先在句号处断开
   - UI 层增加摘要清洗作为最后一道防线
+  - 摘要长度限制从 100 → 500 字符（`7b42078`）
 - **Planner 容错**（`agents/main_agent.py`）：
   - 实现三层降级 JSON 解析策略（直接解析 → regex 提取 → 兜底修复）
   - 添加 JSON 格式错误的自动修复逻辑
@@ -42,6 +43,55 @@
   - 避免同一持久化目录创建多个实例导致数据丢失
   - 修复 embedding function conflict 错误
 - **涉及文件**：`agents/briefing_agent.py`, `agents/main_agent.py`, `models/vector_store.py`, `ui/pages/home_page.py`
+
+### 子方案 D：简报结构重构 — 平铺格式 + UI 兼容（ab02ae3, d54bbb4, 00cb499）
+
+- **问题**：旧版简报按 categories 分类组织，结构复杂、前端渲染困难
+- **修复**（`d54bbb4`, `ab02ae3`）：
+  1. **移除 categories 分类逻辑**，采用 items 平铺格式，每条条目独立呈现
+  2. **条目结构完善**：URL 必填、主条目 ★ 标记、类似报道作为子条目展示
+  3. **HTML 标签清理**：生成简报时自动去除 HTML 标签
+  4. **反馈按钮优化**：仅主条目显示反馈按钮，子条目不显示
+- **ChromaDB 稳定性**（`ab02ae3`）：
+  - 修复空集合查询导致的异常
+  - 修复 numpy 布尔判断异常（`.bool()` 错误）
+- **UI 兼容**（`00cb499`, `ab02ae3`）：
+  - 简报列表项显示格式优化，标题/数量智能回退
+  - 兼容新旧两种简报格式（categories / items），无破坏性切换
+- **架构文档**：新增 `docs/ARCHITECTURE_FOR_RESUME.md` 架构详解文档
+- **涉及文件**：`agents/briefing_agent.py`, `ui/pages/home_page.py`, `ui/pages/briefing_page.py`, `docs/ARCHITECTURE_FOR_RESUME.md`
+
+### 子方案 E：RSS 源更新 + 反馈系统修复 + VectorStore 维度安全（7bd1c17, 743d97f）
+
+- **RSS 源更新**（`7bd1c17`）：
+  - 替换为 36氪、少数派、阮一峰直连 RSS 源，提升采集稳定性
+  - `search_web` 触发条件优化：当采集来源 < 3 个时自动补充搜索
+  - RSS 采集状态标识增强，明确区分成功/失败/跳过
+- **反馈系统 ID 映射修复**（`743d97f`）：
+  - **问题**：反馈记录中的 `item_id` 与实际简报条目 ID 不匹配，导致反馈数据无法关联
+  - **修复**：JOIN 查询重建 `ranked → dedup` 映射链，`brief_id` / `item_id` 状态字段对齐
+  - 新增 `scripts/fix_brief_ids.py` 修复历史数据
+  - UI 重写支持分类渲染 + 条目级反馈按钮
+- **VectorStore 维度安全检查**（`7bd1c17`）：
+  - `feedback_agent` 写入向量前校验维度匹配，避免维度不一致导致 ChromaDB 写入失败
+  - VectorStore 维度不匹配时自动检测并修复（删除旧集合重建）
+  - 新增 `scripts/reset_chromadb.py` 一键重置工具
+- **涉及文件**：`agents/feedback_agent.py`, `agents/collection_agent.py`, `models/vector_store.py`, `ui/pages/home_page.py`, `scripts/fix_brief_ids.py`, `scripts/reset_chromadb.py`
+
+### 子方案 F：JSON 解析多层 fallback + Agent 文档建设（ba3b50e）
+
+- **JSON 解析增强**（`agents/main_agent.py`, `agents/briefing_agent.py`）：
+  - 实现多层 fallback JSON 解析策略：直接解析 → regex 提取 → 规则兜底
+  - fallback 简报保留更多有效数据（URL、标题、摘要），避免丢失信息
+  - `generate` / `quality` 调用计数分离，统计更精准
+  - max_turns 从 5 降至 4，减少不必要的 LLM 重试
+- **VectorStore 初始化修复**（`models/vector_store.py`）：
+  - 修复 `embedding_fn` 与 ChromaDB 内置 embedding function 冲突问题
+  - 确保单例模式下初始化参数一致性
+- **文档建设**：
+  - 新增 7 个 Agent 内部设计文档（`docs/agents/` 目录）
+  - 新增 `scripts/test_prefilter_real.py` 预过滤真机验证脚本
+- **涉及文件**：`agents/main_agent.py`, `agents/briefing_agent.py`, `models/vector_store.py`, `scripts/test_prefilter_real.py`, `docs/agents/`
 
 ---
 
@@ -188,11 +238,23 @@ A+B 叠加:
   2. Router JSON 被 max_tokens=256 截断 → 提升到 512
   3. Briefing 系统提示词收敛性不足 → 强化 finish_task 触发条件
 
+### Phase 7: UI 重构 — Pipeline 启动逻辑 + 日志双输出（2f242f2）✅
+
+- **Pipeline 启动逻辑重构**（`ui/pages/home_page.py`）：
+  - 将管线启动从同步阻塞改为子进程模式，Streamlit UI 不再被管线阻塞
+  - 日志双输出：同时写入文件 + 终端实时显示
+  - 进程状态追踪：通过 `st.session_state` 管理 `pipeline_proc` / `pipeline_running` 状态
+  - 前端终端组件：黑底绿字终端风格，JS 定时 fetch 日志文件实现局部刷新，避免 `st.rerun()` 导致的整页闪烁
+- **HTTP 日志服务器**（`ui/pages/home_page.py`）：
+  - 内置轻量 HTTP 服务（端口 18990），暴露 `data/` 目录日志文件
+  - 使用 `st.cache_resource` 确保服务器在 Streamlit 生命周期中只启动一次
+  - 支持 CORS 跨域访问（Streamlit iframe 内 fetch 请求）
+- **涉及文件**：`ui/pages/home_page.py`
+
 ### 不改动的文件
 
 - `config/config.yaml` — 无新增配置
 - `agents/feedback_agent.py` — 保持不变
-- Streamlit UI (`ui/`) — 保持不变
 - 无新增第三方依赖
 
 ### 回退策略

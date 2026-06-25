@@ -25,9 +25,12 @@ Prompt 的核心定位是「自主规划 + 定时执行 + 个性化筛选」的 
 
 **采用多 Agent 自主规划架构**。
 
-- 主 Agent 作为 Coordinator + Planner，通过 ReAct 循环自主编排子 Agent
-- 采集 Agent 和排序 Agent 各有 ReAct 循环（自主判断是否需要补充搜索/调参）
-- 简报 Agent 线性流程（一次生成+审查即可）
+- 主 Agent 作为 Coordinator + Planner，通过 **规则优先 + LLM 兜底** 的混合路由编排子 Agent
+  - 正常流程由 `_rule_based_router_decision()` 确定性规则路由覆盖，无需 LLM 参与
+  - 仅当规则无法覆盖（如 `needs_retry` 或 `overall_pass=false`）时才回退到 planner 让 LLM 重新编排
+- 采集 Agent 支持双模式：**Pipeline 模式**（默认，无 LLM，固定流程）和 **ReAct 模式**（LLM 自主决策）
+- 排序 Agent 有 ReAct 循环（自主判断去重+排序流程）
+- 简报 Agent 有内部 ReAct 循环（generate → quality_check → 迭代，max_turns=4，max_retries=2）
 - 反馈子 Agent 异步运行
 - planner 为 P0 核心闭环，不是 P1 增强
 
@@ -44,12 +47,14 @@ Prompt 的核心定位是「自主规划 + 定时执行 + 个性化筛选」的 
 - planner 从 P1 提升到 P0 核心闭环
 - 工具注册类型从 2 类（FC + MCP）变为 3 类（子 Agent + MCP + FC）
 - State TypedDict 增加 sub_agent_plan / react_cycle_count / 子 Agent 结果字段
-- 开发复杂度增加（需要实现 5 个独立 StateGraph + 调度接口 + ReAct 循环）
+- 开发复杂度增加（需要实现 4 个独立 StateGraph + 调度接口 + ReAct 循环）
+- **v2.2.0 演进**：路由机制从"LLM 全动态"优化为"规则优先 + LLM 兜底"，正常流程节省 6 次 router LLM 调用；采集默认 Pipeline 模式（采集 LLM -100%）；简报增加内部 ReAct 循环
 
 ## 风险与缓解
 
 | 风险 | 缓解策略 |
 |------|---------|
 | 开发复杂度增加 | 子 Agent 内部流程简单（3-4 节点），主 Agent 调度接口明确 |
-| ReAct 循环可能无限递归 | 设置 max_react_cycles=3，超过强制进入 reflect |
+| ReAct 循环可能无限递归 | 设置 max_react_cycles=3，超过强制进入 update_memory |
 | 子 Agent 通信开销 | LangGraph 子图通过 State 传递数据，无 IPC 开销 |
+| LLM 路由不稳定 | v2.2.0 引入规则优先路由，仅异常场景回退 LLM，大幅降低路由不确定性 |

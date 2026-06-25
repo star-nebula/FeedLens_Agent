@@ -27,7 +27,7 @@
 | 组件 | 选型 | 用途 |
 |------|------|------|
 | Agent 编排 | LangGraph StateGraph | 主 Agent + 子 Agent 状态图 |
-| LLM | DeepSeek V4 Flash | 编排决策 + 简报生成 + 去重裁决 |
+| LLM | DeepSeek Chat（deepseek-chat） | 编排决策 + 简报生成 + 去重裁决 |
 | Embedding | bge-small-zh-v1.5（本地） | 条目向量化 + 偏好向量 |
 | 向量数据库 | ChromaDB | 条目历史 + 用户偏好 + 长期记忆 |
 | 关系数据库 | SQLite（WAL 模式，11 张表） | 全量数据持久化 |
@@ -42,7 +42,7 @@
 ### 4.1 六层架构
 
 ```
-展示层 (Streamlit) → 规划层 (主Agent) → 执行层 (子Agent) → 工具层 (13个工具) → 记忆层 (SQLite+ChromaDB) → 数据层
+展示层 (Streamlit) → 规划层 (主Agent) → 执行层 (子Agent) → 工具层 (14个工具) → 记忆层 (SQLite+ChromaDB) → 数据层
 ```
 
 ### 4.2 主 Agent 工作流（LangGraph StateGraph）
@@ -73,7 +73,7 @@ understand_intent → planner → router_node → invoke_sub_agent → router_no
 
 **容错机制**：
 - 连续 3 次相同路由 → 强制收敛
-- agentic_turn_count ≥ 5（可配置）→ 强制结束
+- agentic_turn_count ≥ 5（`config.yaml` `agents.max_turns` 可配置）→ 强制结束
 - 子 Agent 通过 `run_with_isolation` 隔离执行，单个失败不阻塞管线
 - Planner JSON 解析三层降级：直接解析 → regex 清洗 → 逐字段提取
 
@@ -165,7 +165,7 @@ understand_intent → planner → router_node → invoke_sub_agent → router_no
 
 ---
 
-## 七、13 个工具一览
+## 七、14 个工具一览
 
 | 工具 | 阶段 | 说明 |
 |------|------|------|
@@ -176,7 +176,7 @@ understand_intent → planner → router_node → invoke_sub_agent → router_no
 | `deduplicate` | Ranking | 向量去重 + LLM 批量裁决 |
 | `rank_items` | Ranking | 四因子加权排序 |
 | `generate_briefing` | Briefing | 结构化 JSON 简报生成 |
-| `quality_check` | Briefing（内部） | 三维质量审查（代码层调用） |
+| `quality_check` | Briefing（内部） | 三维质量审查（代码层调用，不暴露给LLM） |
 | `push_notification` | Main | MCP 推送简报 |
 | `record_feedback` | Main | 记录用户反馈 + 更新偏好 |
 | `read_memory` | Main | 读取历史记忆 |

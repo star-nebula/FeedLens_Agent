@@ -2,7 +2,7 @@
 
 > **定位**：主动式信息聚合 Agent 系统，核心差异化在于"机器自主规划 + 定时触发 + 个性化过滤"，而非传统的"用户问 → 系统答"。
 >
-> **技术栈**：Python / LangGraph / APScheduler / ChromaDB / SQLite / DeepSeek LLM / MCP (Model Context Protocol)
+> **技术栈**：Python / LangGraph / Streamlit / APScheduler / ChromaDB / SQLite / DeepSeek LLM / MCP (Model Context Protocol)
 
 ---
 
@@ -20,9 +20,9 @@
   └──────────────┘  │  └───────────────────┘   └──────────┬───────────┘ │
          │          │                                      │             │
   重大事件破例触发   │          ┌───────────────────────────▼───────────┐  │
-         │          │          │         Router Node (LLM动态路由)     │  │
-         ▼          │          │  决策: invoke / observe / reflect /   │  │
-  trigger_type=     │          │        push / update_memory / abort   │  │
+         │          │          │   Router Node (规则优先 + LLM兜底)   │  │
+         ▼          │          │  规则路由覆盖正常流，异常/重试场景    │  │
+  trigger_type=     │          │  才升级到 LLM 做复杂决策             │  │
   breaking_news     │          └──────┬────────────────────────────────┘  │
                     │                 │                                    │
                     │    ┌────────────▼────────────────────────────────┐  │
@@ -48,7 +48,7 @@
 
 ### "被动响应"→"主动触发"的关键转变
 
-传统 RAG 问答系统依赖用户发送 Query 才启动。FeedLens 通过 **APScheduler BackgroundScheduler** 在独立后台线程运行 CronTrigger（默认每日 06:00 Asia/Shanghai），到点后以 `trigger_type=daily_briefing` 向主 Agent 注入初始状态，整个采集→排序→生成→推送管线由机器自主完成，用户无需在场。此外，Ranking 完成后若检测到 `_score > 0.85 && freshness < 2h`，调度器以 `trigger_type=breaking_news` 再次触发，实现"破例立即推送"。
+传统 RAG 问答系统依赖用户发送 Query 才启动。FeedLens 通过 **APScheduler BackgroundScheduler** 在独立后台线程运行 CronTrigger（默认每日 06:00 Asia/Shanghai），到点后以 `trigger_type=daily_briefing` 向主 Agent 注入初始状态，整个采集→排序→生成→推送管线由机器自主完成，用户无需在场。此外，Ranking 完成后若检测到 `_score > 0.85 && freshness < 2h`，调度器以 `trigger_type=breaking_news` 再次触发，实现"破例立即推送"。UI 端（Streamlit）支持手动触发，实际执行通过 `utils/pipeline_runner.py` 子进程模式隔离，避免阻塞 UI 线程。
 
 ---
 
@@ -97,7 +97,7 @@ INSERT (started) → UPDATE (completed)
 
 | 接口 | 入参 | 说明 |
 |-----|------|------|
-| `POST /run` → `main_agent.invoke(state)` | `trigger_type, goal_text, user_id` | 手动触发一次完整简报生成管线 |
+| `POST /run` → `pipeline_runner.run_agent_pipeline(trigger_type)` | `trigger_type` (manual/daily/breaking_news) | 触发一次完整简报生成管线（子进程隔离执行） |
 | `GET /briefs` → `db_read(briefs)` | `user_id, limit` | 查询历史简报列表（含 quality_score） |
 | `POST /feedback` → `FeedbackAgent.invoke` | `user_id, item_id, feedback_type` | 提交 like/dislike/irrelevant，异步触发偏好向量更新 |
 | `PUT /settings` → `db_write(users)` | `goal_text, topics, preferred_sources` | 更新用户目标与订阅源配置 |
@@ -106,10 +106,12 @@ INSERT (started) → UPDATE (completed)
 
 | 接口 | 协议 | 说明 |
 |-----|------|------|
-| `search_web MCP` | SSE :8100 | Collection Agent 在 raw items < 5 条时向 MCP Server 发起补充搜索，参数 `{query, max_results}` |
+| `search_web MCP` | SSE :8100 | Collection Agent 在 RSS 采集不足时向 MCP Server 发起补充搜索，参数 `{query, max_results}` |
 | `push_notification MCP` | stdio | 主 Agent push_notification_node 调用，参数 `{brief, user_id, immediate}`，写 JSONL 通知队列 |
-| `FeedLensState` 共享状态 | 进程内 TypedDict | 所有节点以 LangGraph State 传递数据，等价于内部"消息总线"；`agent_status` 字段记录各子 Agent 执行结果（success / isolated / not_executed）|
+| `FeedLensState` 共享状态 | 进程内 TypedDict | 所有节点以 LangGraph State 传递数据，等价于内部"消息总线"；包含 30+ 字段覆盖会话元信息、编排控制、子Agent结果、质量审查、推送、反馈、记忆、路由控制等全部环节 |
+| `ToolRegistry.dispatch()` | 进程内函数调用 | 15 个注册工具的统一分发入口，支持按阶段（collection/ranking/briefing/main）获取工具 schema |
 | `hooks.register / hooks.run` | 进程内事件钩子 | observe.evaluate / reflect.check / push.decide 三个策略扩展点，P1 可在不修改核心节点的前提下替换评估逻辑 |
+| `memory_manager.get_context / add_memory` | 进程内函数调用 | Planner 记忆注入：情节记忆（SQLite execution_logs，近7天）+ 长期记忆（ChromaDB domain_knowledge，语义检索） |
 
 ---
 
@@ -143,25 +145,34 @@ final_score = w₁·similarity + w₂·recency + w₃·(preference + feedback_bi
 - `feedback_bias`：临时补偿项（like+0.15, dislike-0.10, irrelevant-0.15），EMA 更新后自然归零，避免单次反馈永久污染偏好。
 - 权重在冷启动（feedback_count < 3）和暖启动状态动态切换：冷启动侧重 similarity（40%），暖启动侧重 preference（40%）。
 
-**性能**：向量去重阈值 0.88（余弦），超过 threshold 的条目对直接合并，相似度 0.70~0.88 的条目送 LLM 裁决（单次最多 20 条），保证去重质量不完全依赖向量精度。用户规则通过 ChromaDB 向量化存储，即使 1000 条偏好记录，近邻查询复杂度 O(log n)，不会成为排序瓶颈。
+**性能**：向量去重采用三层策略——高相似度（≥0.88）直接判重合并，低相似度（≤0.70）直接保留，中间区间（0.70~0.88）送 LLM **批量裁决**（一次 API 调用裁决多个候选对，而非逐对串行），在保证质量的同时控制 API 成本。排序前还引入**跨批次向量预过滤**（prefilter），将条目与 ChromaDB 历史简报做相似度过滤，条目数可减少 70%+，token 消耗减少 73%。用户规则通过 ChromaDB 向量化存储，即使 1000 条偏好记录，近邻查询复杂度 O(log n)，不会成为排序瓶颈。
 
 ---
 
 ## 五、当前架构瓶颈与演进方向
 
-### 瓶颈：Router Node 是动态路由单点瓶颈
+### 已解决 ✅：Router Node 从全动态路由 → 规则优先路由
 
-**现象**：系统中所有节点间的跳转均汇聚到 `router_node`，每一步状态转移都需要调用一次 LLM（`temperature=0.1, max_tokens=256`）做路由决策，加上主 Agent 各节点本身的 LLM 调用，一次完整管线执行约产生 **6~10 次串行 LLM 调用**。当调度器并发触发（如 breaking_news 与 daily_briefing 同时到达）时，LLM 请求排队，推送延迟从 30s 增至 2min+。
+**原瓶颈**：系统中所有节点间的跳转均汇聚到 `router_node`，每一步状态转移都需要调用一次 LLM 做路由决策，一次完整管线执行约产生 **6~10 次串行 LLM 调用**。
 
-**优化思路：分层路由 + 规则快路径**
+**已实现方案：分层路由 — 规则优先 + LLM 兜底**
 
-将路由决策拆为两层：
-1. **规则路由（零 LLM 延迟）**：在 `_fallback_router_decision()` 已有的确定性规则基础上，将 90% 的"正常流"（采集 OK → 排序 → 简报 → 推送）直接走规则路由，跳过 LLM 调用。
-2. **LLM 路由（仅异常分支）**：仅在检测到 `needs_retry=True` 或 `brief_quality < 0.7` 等异常状态时，才升级到 LLM Router 做复杂决策。
+通过 `_rule_based_router_decision()` 实现规则路由（零 LLM 延迟），覆盖正常流程中的所有确定性场景：
+1. **规则路由覆盖**：plan 非空→执行、已执行未观察→评估、无需重试→审查、审查通过→推送、推送完成→写记忆——全部走确定性规则，无需 LLM 调用。
+2. **LLM 路由仅异常分支**：仅在检测到 `needs_retry=True` 且未达最大循环时，才升级到 LLM Router 做复杂重新编排决策。
 
-这样可以将 LLM 调用次数从每次执行 6~10 次降低到 1~3 次（仅异常场景），正常链路延迟下降 60% 以上，同时保留 LLM 的弹性处理能力应对边缘场景。
+**效果**：正常链路 LLM 调用从 6~10 次降低到 1~3 次（planner + 仅异常时 router），延迟下降 60% 以上。
+
+### 当前瓶颈：单进程顺序执行限制并发
+
+**现象**：子 Agent 按 Collection → Ranking → Briefing 严格顺序执行，且通过 `execution_fence` 做 per-user 串行化，同一用户同时只能有一个管线在执行。当定时触发与手动触发并发时，后到的触发会被跳过。
+
+**演进方向**：
+1. **Pipeline/ReAct 双模式**（Collection Agent 已实现）：正常场景走 Pipeline 模式（零 LLM 调用），异常场景（采集不足、质量低）才走 ReAct 模式，进一步减少 API 消耗。
+2. **子 Agent 并行化**：当 Ranking 和 Briefing 的输入不依赖前序 Agent 全部完成时，可考虑并行调度（需引入 MQ 或 asyncio 协程）。
+3. **多用户扩展**：当前 MVP 固定 user_id=1，多用户场景需要用户级隔离（独立 ChromaDB Collection + 独立 SQLite 视图）。
 
 ---
 
-*文档基于代码快照自动审查生成，反映当前 MVP 实现状态。*
-*最后更新：2026-06-22*
+*文档反映当前 v2.2.0 实现状态，基于实际代码审查更新。*
+*最后更新：2026-06-25*
