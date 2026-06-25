@@ -3,12 +3,15 @@
 """
 
 import streamlit as st
+import streamlit.components.v1 as components
 import subprocess
 import sys
 import os
 import json
 import re
 import threading
+import http.server
+import socketserver
 from datetime import datetime, timezone, timedelta
 from models.database import Database
 from utils.pipeline_runner import run_agent_pipeline
@@ -16,29 +19,53 @@ from agents.feedback_agent import process_feedback_async
 
 
 def _run_pipeline_with_tee(trigger: str = "manual"):
-    """启动 pipeline 子进程，输出同时写入日志文件和终端。"""
-    log_path = "data/pipeline.log"
-    log_file = open(log_path, "a", encoding="utf-8")
+    """启动 pipeline 子进程，输出同时到文件 + 控制台。
+
+    通过 PIPE 捕获 stdout，后台线程 tee 到：
+    1. data/pipeline.log（持久化）
+    2. data/pipeline_ui.log（前端专用，每次运行覆盖）
+    3. sys.stderr（后端控制台可见）
+    """
+    run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+    ui_log_path = f"data/pipeline_ui_{run_id}.log"
+
+    # 持久化日志（追加）
+    persist_log = open("data/pipeline.log", "a", encoding="utf-8")
+    # 前端专用日志（覆盖写入，避免历史污染）
+    ui_log = open(ui_log_path, "w", encoding="utf-8")
+
+    # 初始化 session_state
+    st.session_state["pipeline_ui_log_path"] = ui_log_path
+    st.session_state["pipeline_running"] = True
+    st.session_state["pipeline_proc"] = None
 
     env = os.environ.copy()
     env["PYTHONUTF8"] = "1"
+
     proc = subprocess.Popen(
         [sys.executable, "-m", "utils.pipeline_runner", "--trigger", trigger],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         env=env,
-        creationflags=subprocess.DETACHED_PROCESS,
+        creationflags=subprocess.DETACHED_PROCESS if sys.platform == "win32" else 0,
     )
+    st.session_state["pipeline_proc"] = proc
 
     def _reader():
         for line in iter(proc.stdout.readline, b""):
             text = line.decode("utf-8", errors="replace")
-            log_file.write(text)
-            log_file.flush()
-            sys.stderr.buffer.write(line)
-            sys.stderr.buffer.flush()
+            # 1. 后端控制台可见
+            sys.stderr.write(text)
+            sys.stderr.flush()
+            # 2. 持久化日志
+            persist_log.write(text)
+            persist_log.flush()
+            # 3. 前端 UI 日志文件
+            ui_log.write(text)
+            ui_log.flush()
         proc.stdout.close()
-        log_file.close()
+        ui_log.close()
+        persist_log.close()
 
     threading.Thread(target=_reader, daemon=True).start()
     return proc
@@ -178,6 +205,161 @@ def _ui_clean_summary(text: str, max_chars: int = 200) -> str:
     return cleaned
 
 
+# ---- 轻量 HTTP 日志服务器 ----
+# 前端 JS 通过 fetch 轮询日志文件，避免 st.rerun() 导致的整页闪烁。
+# 使用 st.cache_resource 确保 HTTP 服务器在整个 Streamlit 生命周期中只启动一次。
+import http.server
+import socketserver
+
+_LOG_SERVER_PORT = 18990
+
+
+def _get_log_server():
+    """用 st.cache_resource 确保 HTTP 服务器全局只启动一次。"""
+    _start_http_server()
+    return _LOG_SERVER_PORT
+
+
+@st.cache_resource(show_spinner=False)
+def _start_http_server():
+    """启动轻量 HTTP 服务，暴露 data/ 目录下日志文件（cache_resource 保证只执行一次）。"""
+
+    class _LogHandler(http.server.SimpleHTTPRequestHandler):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, directory=os.path.abspath("data"), **kwargs)
+
+        def log_message(self, format, *args):
+            pass  # 静默
+
+        def end_headers(self):
+            # 允许跨域（Streamlit iframe 发起的请求）
+            self.send_header("Access-Control-Allow-Origin", "*")
+            super().end_headers()
+
+    # 尝试启动，如果端口被占用则复用已有服务
+    try:
+        server = socketserver.ThreadingTCPServer(("127.0.0.1", _LOG_SERVER_PORT), _LogHandler)
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        print(f"[home_page] HTTP 日志服务器已启动: http://127.0.0.1:{_LOG_SERVER_PORT}/", flush=True)
+    except OSError:
+        print(f"[home_page] HTTP 日志服务器端口 {_LOG_SERVER_PORT} 已被占用，复用已有服务", flush=True)
+
+
+def _render_terminal():
+    """渲染实时日志终端显示框。
+
+    黑底绿字终端风格，JS 定时 fetch 日志文件实现局部刷新，
+    不触发 st.rerun()，无整页闪烁。
+    """
+    running = st.session_state.get("pipeline_running", False)
+    log_path = st.session_state.get("pipeline_ui_log_path", "")
+
+    if not running and not log_path:
+        return
+
+    # 确保日志服务器已启动（cache_resource 保证幂等）
+    _get_log_server()
+
+    # 检查进程是否已结束
+    proc = st.session_state.get("pipeline_proc")
+    if proc is not None and proc.poll() is not None:
+        st.session_state["pipeline_running"] = False
+        running = False
+
+    # 日志文件名（供 JS fetch）
+    log_filename = os.path.basename(log_path) if log_path else ""
+
+    # 状态栏
+    if running:
+        status_text = "⏳ 管线运行中..."
+        status_color = "#ffa500"
+    else:
+        exit_code = proc.returncode if proc else None
+        if exit_code == 0:
+            status_text = "✅ 管线执行完成"
+            status_color = "#4caf50"
+        elif exit_code is not None:
+            status_text = f"❌ 管线执行失败 (exit={exit_code})"
+            status_color = "#f44336"
+        else:
+            status_text = "⏹️ 管线已结束"
+            status_color = "#888"
+
+    st.markdown(
+        f'<span style="color:{status_color};font-weight:bold;font-size:14px;">{status_text}</span>',
+        unsafe_allow_html=True,
+    )
+
+    # 终端组件：JS 自刷新，不依赖 st.rerun()
+    terminal_html = f"""<!DOCTYPE html>
+<html><head><meta charset="utf-8"><style>
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+#term-box {{
+    background-color: #0c0c1d;
+    color: #00ff88;
+    font-family: 'Cascadia Code', 'Consolas', 'Courier New', monospace;
+    font-size: 12px;
+    line-height: 1.5;
+    padding: 12px 16px;
+    border-radius: 6px;
+    border: 1px solid #333;
+    height: 350px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}}
+</style></head><body>
+<div id="term-box">（等待输出...）</div>
+<script>
+(function() {{
+    var box = document.getElementById("term-box");
+    var running = {str(running).lower()};
+    var timer = null;
+    var emptyCount = 0;
+
+    function fetchLog() {{
+        fetch("http://127.0.0.1:{_LOG_SERVER_PORT}/{log_filename}?_t=" + Date.now())
+            .then(function(r) {{
+                if (!r.ok) throw new Error("HTTP " + r.status);
+                return r.text();
+            }})
+            .then(function(text) {{
+                if (text && text.trim()) {{
+                    box.textContent = text;
+                    box.scrollTop = box.scrollHeight;
+                    emptyCount = 0;
+                }} else if (!running) {{
+                    // 进程已结束，不再等待
+                    emptyCount++;
+                    if (emptyCount > 3) {{
+                        if (timer) clearInterval(timer);
+                    }}
+                }}
+            }})
+            .catch(function(err) {{
+                console.log("fetchLog error:", err.message);
+            }});
+    }}
+
+    // 立即拉取一次
+    fetchLog();
+
+    // 运行中每 2 秒拉取；停止后最多再拉 3 次（6 秒后停止）
+    if (running) {{
+        timer = setInterval(fetchLog, 2000);
+    }} else {{
+        timer = setInterval(fetchLog, 2000);
+    }}
+}})();
+</script></body></html>"""
+
+    components.html(terminal_html, height=400, scrolling=False)
+
+    # 完成后提示
+    if not running:
+        st.caption("💡 管线已完成，点击 🔄 刷新 查看最新简报")
+
+
 def render():
     """渲染首页。"""
     st.title("📰 首页")
@@ -192,10 +374,12 @@ def render():
         if st.button("🚀 立即运行", type="primary", key="run_header", use_container_width=True):
             try:
                 _run_pipeline_with_tee("manual")
-                st.success("🚀 管线已后台启动，完成后刷新页面查看简报")
-                st.toast("⏳ 管线运行中（约 1-3 分钟）")
+                st.rerun()
             except Exception as e:
                 st.error(f"管线启动失败: {e}")
+
+    # ---- 终端显示框 ----
+    _render_terminal()
 
     st.markdown("---")
 
@@ -209,9 +393,12 @@ def render():
         with col_a:
             if st.button("🚀 立即运行", type="primary", key="run_empty", use_container_width=True):
                 _run_pipeline_with_tee("manual")
-                st.success("🚀 管线已后台启动，完成后刷新页面查看简报")
+                st.rerun()
         with col_b:
             st.markdown("👉 前往 **Goal 设置** 页面配置您的信息需求。")
+
+        # 无简报时也显示终端框
+        _render_terminal()
         return
 
     # 显示简报列表
