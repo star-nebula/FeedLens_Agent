@@ -3,6 +3,8 @@
 > **定位**：主动式信息聚合 Agent 系统，核心差异化在于"机器自主规划 + 定时触发 + 个性化过滤"，而非传统的"用户问 → 系统答"。
 >
 > **技术栈**：Python / LangGraph / Streamlit / APScheduler / ChromaDB / SQLite / DeepSeek LLM / MCP (Model Context Protocol)
+>
+> 📖 **文档导航**：[docs/README.md](./README.md) | [面试准备指南](./面试准备指南.md)
 
 ---
 
