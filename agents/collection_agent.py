@@ -284,7 +284,7 @@ def _prefilter_against_history(
     Collection Agent 内部函数，对上层透明。
 
     工作原理：
-      1. 对每个条目用 bge-small 编码 title+summary
+      1. 对每个条目用 bge-small 编码纯标题
       2. 在 ChromaDB feed_items 集合中查最相似的历史条目
       3. 余弦相似度 >= threshold → 直接丢弃（历史已有）
       4. 余弦相似度 < threshold → 保留（新数据）
@@ -325,8 +325,7 @@ def _prefilter_against_history(
 
         for item in items:
             title = item.get("title", "")
-            summary = item.get("summary", "")
-            text = f"{title} {summary}".strip()
+            text = title.strip() if title else ""
             if not text:
                 kept.append(item)
                 continue

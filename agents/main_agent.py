@@ -1170,8 +1170,12 @@ def update_memory_node(state: FeedLensState) -> dict:
             print(f"[update_memory] 偏好向量更新失败: {e}", flush=True)
 
     # 🆕 写入条目历史向量到 ChromaDB feed_items（用于跨批次预过滤去重）
+    # 写入全量 collected_items（非仅 ranked_items），确保预过滤能拦截跨批次重复
+    # 使用纯标题编码（与 _prefilter_against_history 查询端一致），
     # 使用 URL+title hash 作为 ChromaDB ID，确保幂等：相同条目多次执行不产生重复向量
-    if ranked_items:
+    collected_items = state.get("collected_items", [])
+    items_to_write = collected_items if collected_items else ranked_items
+    if items_to_write:
         try:
             embedding_model2 = EmbeddingModel()
             vs2 = VectorStore(persist_dir="data/chroma", embedding_fn=embedding_model2.encode)
@@ -1179,11 +1183,10 @@ def update_memory_node(state: FeedLensState) -> dict:
 
             now_iso = datetime.now().isoformat()
             ids, docs, metas = [], [], []
-            for item in ranked_items:
+            for item in items_to_write:
                 url = item.get("url", "")
                 title = item.get("title", "")
-                summary = item.get("summary", "")
-                text = f"{title} {summary}".strip()
+                text = title.strip() if title else ""
                 if not text:
                     continue
                 # 使用 URL+title 的 SHA256 hash 作为 ChromaDB ID，确保同内容幂等

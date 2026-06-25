@@ -102,8 +102,7 @@ def _write_to_history(items: List[Dict[str, Any]], label: str = "") -> int:
     for item in items:
         url = item.get("url", "")
         title = item.get("title", "")
-        summary = item.get("summary", "")
-        text = f"{title} {summary}".strip()
+        text = title.strip() if title else ""
         if not text:
             continue
         content_key = f"{url}|{title}"
@@ -230,8 +229,7 @@ def main():
         results = []
         for item in new_items:
             title = item.get("title", "")
-            summary = item.get("summary", "")
-            text = f"{title} {summary}".strip()
+            text = title.strip() if title else ""
             if not text:
                 continue
             try:
