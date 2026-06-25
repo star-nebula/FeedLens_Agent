@@ -11,10 +11,12 @@
               ↓                                                    ↓
          07_向量预过滤 ←── 06_thinking_mode  ←  05_collection_pipeline  ←  04_Planner_Router规则化
               ↓                                                    ↓
-         08_briefing管线深度优化 ─────────────────────────────────────┘
-              ↑                    ↑
-              └── v2.1 子方案 A ───┘── v2.1 子方案 B
-         (Collection内部预过滤)    (生成前预检+消除ReAct+quality缓存)
+         09_批量LLM裁决(去重)                                    08_briefing管线深度优化
+              ↓
+         10_摘要清洗+Planner容错+VS单例
+              ↑                    ↑                    ↑
+              └── v2.2 子方案 A ──┴── v2.2 子方案 B ──┴── v2.2 子方案 C
+           (纯标题+全量写入)    (批量裁决)        (质量+稳定性)
 ```
 
 > v2.1.0 将 07 和 08 合并为统一版本，共同目标：**减少 LLM 冗余调用，LLM 只做「创造」不做「判断」**
@@ -31,8 +33,10 @@
 | 04 | Planner/Router 规则化降级 | `main_agent.py` | 正常流程节省 6 次 router LLM 调用 | ✅ |
 | 05 | collection pipeline 固定化 | `collection_agent.py`, `config.yaml` | 采集阶段 LLM 调用 -100%，耗时 -60~70% | ✅ |
 | 06 | thinking_mode 关闭 + tool_choice | `llm_provider.py`, 三个 Agent | 修复 V4 function calling 不稳定 | ✅ |
-| 07 | 向量预过滤跨批次去重 | `collection_agent.py`, `main_agent.py`, `vector_store.py`, `config.yaml` | 进入 Ranking 条目 -70%+，rank_items token -73%（Collection 内部步骤） | 📋 v2.1 子方案 A |
+| 07 | 向量预过滤跨批次去重 | `collection_agent.py`, `main_agent.py`, `vector_store.py`, `config.yaml` | 进入 Ranking 条目 -70%+，rank_items token -73%（Collection 内部步骤） | ✅ v2.2.0 子方案 A |
 | 08 | briefing 管线深度优化 | `briefing_agent.py`, `tool_registry.py`, `config.yaml` | ReAct 思考 -100%，quality 仅首次调用，重试 3→2 | 📋 v2.1 子方案 B |
+| 09 | 去重算法批量 LLM 裁决 | `tools/fc_tools.py` | 中间区间 N 次 LLM → 1 次批量调用，HTTP 往返 -80~95% | ✅ v2.2.0 子方案 B |
+| 10 | 摘要清洗 + Planner 容错 + VectorStore 单例 | `briefing_agent.py`, `main_agent.py`, `vector_store.py`, `home_page.py` | 三层清洗去除噪音、三层 JSON 解析防崩溃、单例防数据丢失 | ✅ v2.2.0 子方案 C |
 
 ---
 

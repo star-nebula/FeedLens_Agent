@@ -1,5 +1,50 @@
 # FeedLens Agentic 升级 Changelog
 
+## v2.2.0 — 去重链路修复与摘要清洗增强（2026-06-25）
+
+> 修复跨批次去重失效问题，优化去重算法性能，增强摘要清洗能力。
+
+### 子方案 A：历史去重纯标题编码 + 全量写入（3af4404 → 6be31d6）
+
+- **问题**：预过滤仅写入 `ranked_items`（top 10）到 ChromaDB，导致 84% 条目无法被跨批次拦截，每次采集固定 63 条
+- **修复**：
+  1. **写入端**（`agents/main_agent.py`）：`update_memory_node` 写入范围从 `ranked_items` → `collected_items`（全量），编码文本从 `title + summary` → 纯 `title`
+  2. **查询端**（`agents/collection_agent.py`）：`_prefilter_against_history` 编码文本从 `title + summary` → 纯 `title`，与写入端保持一致
+  3. **测试脚本**（`scripts/test_prefilter_real.py`）：同步编码改为纯标题
+- **设计决策**：纯标题编码原因——
+  - 预过滤是 `feed_items` 集合唯一实际读取场景，标题语义足够判断重复
+  - summary 在向量去重中可能引入噪音，稀释标题核心语义
+  - 两边统一编码保证向量空间一致
+- **兼容性**：`collected_items` 为空时自动回退到 `ranked_items`，无破坏性
+- **涉及文件**：`agents/main_agent.py`, `agents/collection_agent.py`, `scripts/test_prefilter_real.py`
+
+### 子方案 B：去重算法批量 LLM 裁决（8810282）
+
+- **问题**：批次内去重（`tools/fc_tools.py` 的 `deduplicate()`）对中间相似度区间的条目逐对调用 LLM，HTTP 往返次数多
+- **修复**：实现两阶段去重策略
+  1. 高相似度区间 → 直接硬判为重复（无 LLM 调用）
+  2. 中间区间 → 收集所有待裁决 pair，**一次性批量调用 LLM** 裁决
+- **溢出保护**：超限部分硬判为重复，避免单次调用过大
+- **兼容性**：保留原有单对裁决函数 `llm_adjudicate_duplicates` 作为兼容支持
+- **涉及文件**：`tools/fc_tools.py`
+
+### 子方案 C：摘要清洗增强 + Planner 容错 + VectorStore 单例（3af4404）
+
+- **摘要清洗**（`agents/briefing_agent.py`, `ui/pages/home_page.py`）：
+  - 新增 `_clean_summary` 函数，去除作者署名、查看全文、HTML 标签等噪音
+  - 智能截断，优先在句号处断开
+  - UI 层增加摘要清洗作为最后一道防线
+- **Planner 容错**（`agents/main_agent.py`）：
+  - 实现三层降级 JSON 解析策略（直接解析 → regex 提取 → 兜底修复）
+  - 添加 JSON 格式错误的自动修复逻辑
+  - 规范输出约束，禁止 reason 字段使用特殊字符
+- **VectorStore 单例**（`models/vector_store.py`）：
+  - 避免同一持久化目录创建多个实例导致数据丢失
+  - 修复 embedding function conflict 错误
+- **涉及文件**：`agents/briefing_agent.py`, `agents/main_agent.py`, `models/vector_store.py`, `ui/pages/home_page.py`
+
+---
+
 ## v2.1.0 — 减少 LLM 冗余调用：向量预过滤 + 简报管线深度优化（2026-06-24 规划中）
 
 > **统一目标**：通过硬编码/规则化手段减少不必要的 LLM API 调用，把 LLM 从「判断」角色解放为「创造」角色。
