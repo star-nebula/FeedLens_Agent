@@ -1,6 +1,6 @@
 <mxfile host="65bd71144e">
     <diagram id="autonomy_v2" name="FeedLens 自主性架构 v2">
-        <mxGraphModel dx="1196" dy="815" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1450" pageHeight="1100" background="#ffffff" math="0" shadow="0">
+        <mxGraphModel dx="690" dy="182" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1450" pageHeight="1480" background="#ffffff" math="0" shadow="0">
             <root>
                 <mxCell id="0"/>
                 <mxCell id="1" parent="0"/>
@@ -178,7 +178,7 @@
                 <mxCell id="nd_sqlite" value="SQLite 情节记忆 (🆕 v2)&#xa;execution_logs 近7天执行记录&#xa;run_logs / briefs / deduped_items" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#C8E6C9;strokeColor=#43A047;strokeWidth=2;fontSize=11;fontStyle=1;fontColor=#1B5E20;align=center;" parent="1" vertex="1">
                     <mxGeometry x="975" y="714" width="230" height="65" as="geometry"/>
                 </mxCell>
-                <mxCell id="evolve_note" value="反馈 → 偏好向量变化 → 下轮排序结果不同 → 情节记忆指导 Planner 决策&#xa;→ 「越用越知道自己想要什么」" style="text;html=1;strokeColor=none;fillColor=#E8F5E9;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=12;fontStyle=1;fontColor=#2E7D32;rounded=1;strokeWidth=1;strokeColor=#2E7D32;" parent="1" vertex="1">
+                <mxCell id="evolve_note" value="反馈 → 偏好向量变化 → 下轮排序结果不同 &lt;br&gt;→ 情节记忆指导 Planner 决策 → 「越用越知道自己想要什么」" style="text;html=1;strokeColor=none;fillColor=#E8F5E9;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=12;fontStyle=1;fontColor=#2E7D32;rounded=1;strokeWidth=1;strokeColor=#2E7D32;" parent="1" vertex="1">
                     <mxGeometry x="900" y="820.5" width="380" height="40" as="geometry"/>
                 </mxCell>
                 <mxCell id="e_fb_pref" value="EMA 更新偏好" style="endArrow=block;html=1;strokeWidth=2;strokeColor=#388E3C;endFill=1;exitX=1;exitY=0.3;exitDx=0;exitDy=0;entryX=0;entryY=0.5;entryDx=0;entryDy=0;" parent="1" source="nd_feedback" target="nd_prefs" edge="1">
@@ -238,6 +238,39 @@
                 </mxCell>
                 <mxCell id="vs_content" value="① Breaking News → Planner 内置规则（非独立实时模块）&lt;br&gt;② Router → 规则优先路由 + LLM 兜底&lt;br&gt;③ 新增 observe_results 节点（结构化观察摘要）&lt;br&gt;④ coordinator_reflect 退回条件 → overall_pass=false，退回目标 → planner&lt;br&gt;⑤ 双重上限 (react_cycle&amp;lt;3 + agentic_turn&amp;lt;5) + 死循环检测&lt;br&gt;⑥ FeedbackAgent → 异步独立入口 (threading.Thread)&lt;br&gt;⑦ 补充 ChromaDB feed_items + SQLite 情节记忆" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=10;fontColor=#37474F;" parent="1" vertex="1">
                     <mxGeometry x="830" y="938" width="540" height="85" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_bg" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#FAFAFA;strokeColor=#9E9E9E;strokeWidth=1.5;" vertex="1" parent="1">
+                    <mxGeometry x="60" y="1050" width="1330" height="320" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_title" value="📋 图中字段/术语注释" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=14;fontStyle=1;fontColor=#37474F;" vertex="1" parent="1">
+                    <mxGeometry x="80" y="1058" width="250" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_col1_title" value="主 Agent State 字段" style="text;html=1;strokeColor=none;fillColor=#FFF3E0;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontStyle=1;fontColor=#E65100;rounded=1;" vertex="1" parent="1">
+                    <mxGeometry x="80" y="1090" width="180" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_col1" value="structured_goal：结构化目标（LLM 解析后的分类、关键词等）&lt;br&gt;goal_embedding：目标向量（用户 Goal 的向量化表示）&lt;br&gt;needs_retry：需要重试（子 Agent 结果不达标，需重新编排）&lt;br&gt;overall_pass：整体审查通过（coordinator_reflect 综合判断）&lt;br&gt;collection_ok：采集是否成功（Collection Agent 执行状态）&lt;br&gt;ranking_ok：排序是否成功（Ranking Agent 执行状态）&lt;br&gt;briefing_ok：简报是否成功（Briefing Agent 执行状态）&lt;br&gt;issues：问题列表（observe 发现的子 Agent 问题）&lt;br&gt;suggested_action：建议动作（observe 给出的修正方向）&lt;br&gt;push_immediate：立即推送（Breaking News 触发时跳过常规流程）&lt;br&gt;react_cycle：ReAct 循环（当前推理-行动轮次，上限 3）&lt;br&gt;agentic_turn：Agent 轮次（主 Agent 总执行轮次，上限 5）&lt;br&gt;agent_status：Agent 状态（记录各子 Agent 运行/隔离/完成）&lt;br&gt;router_history：路由历史（所有路由决策记录，用于死循环检测）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=10;fontColor=#424242;" vertex="1" parent="1">
+                    <mxGeometry x="80" y="1118" width="420" height="200" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_col2_title" value="排序 / 去重 / 简报相关" style="text;html=1;strokeColor=none;fillColor=#E8F5E9;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontStyle=1;fontColor=#2E7D32;rounded=1;" vertex="1" parent="1">
+                    <mxGeometry x="520" y="1090" width="180" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_col2" value="top_score：最高分数（Breaking News 判定阈值，&gt;0.85 触发）&lt;br&gt;similarity：相似度（条目与 Goal 的语义匹配度）&lt;br&gt;recency：时效性（条目发布时间的新鲜度）&lt;br&gt;preference：偏好（条目与用户历史偏好的匹配度）&lt;br&gt;importance：重要性（条目来源/热度等综合权重）&lt;br&gt;feedback_count：反馈数量（用户累计反馈条数，&lt;3 为冷启动）&lt;br&gt;feedback_bias：反馈偏置（单次反馈的临时加减分）&lt;br&gt;dedup_threshold：去重阈值（0.88，余弦相似度≥此值直接判重）&lt;br&gt;prefilter：预过滤（跨批次向量去重，阈值 0.92）&lt;br&gt;completeness：完整性（简报预期分类覆盖了多少）&lt;br&gt;coherence：连贯性（简报结构化检查，必填字段/格式合规）&lt;br&gt;relevance：相关性（简报与 Goal 的语义匹配度）&lt;br&gt;conciseness：简洁性（简报摘要长度控制）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=10;fontColor=#424242;" vertex="1" parent="1">
+                    <mxGeometry x="520" y="1118" width="420" height="185" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_col3_title" value="偏好 / 记忆 / 容错" style="text;html=1;strokeColor=none;fillColor=#F3E5F5;align=center;verticalAlign=middle;whiteSpace=wrap;fontSize=11;fontStyle=1;fontColor=#7B1FA2;rounded=1;" vertex="1" parent="1">
+                    <mxGeometry x="960" y="1090" width="180" height="22" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_col3" value="v_like：喜欢向量（用户喜欢的条目特征向量）&lt;br&gt;v_dislike：不喜欢向量（用户不喜欢的条目特征向量）&lt;br&gt;EMA：指数移动平均（α=0.3，平滑更新偏好向量）&lt;br&gt;SHA256：哈希去重（用 SHA256 做条目幂等去重）&lt;br&gt;feed_items：条目向量集合（ChromaDB，跨批次去重数据源）&lt;br&gt;run_with_isolation：执行隔离（子 Agent 异常不影响其他 Agent）&lt;br&gt;execution_fence：执行栅栏（per-user threading.Lock 防并发）&lt;br&gt;execution_logs：执行日志表（SQLite，存储近7天执行记录）&lt;br&gt;run_logs：运行日志表（SQLite，每次运行的详细信息）&lt;br&gt;briefs：简报表（SQLite，已生成的简报内容）&lt;br&gt;deduped_items：去重条目表（SQLite，已去重的条目记录）&lt;br&gt;Planner：编排器节点（LLM 自主编排子 Agent 执行计划）&lt;br&gt;Router：路由节点（决定下一步跳到哪个节点，规则优先+LLM兜底）&lt;br&gt;cron：定时表达式（APScheduler 定时触发的 cron 表达式）" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;fontSize=10;fontColor=#424242;" vertex="1" parent="1">
+                    <mxGeometry x="960" y="1118" width="420" height="200" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_separator" value="" style="line;strokeWidth=1;fillColor=none;align=left;verticalAlign=middle;top=0;left=0;right=0;bottom=0;points=[];portConstraint=eastwest;" vertex="1" parent="1">
+                    <mxGeometry x="80" y="1304" width="1300" height="4" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_abbr" value="通用缩写：LLM = 大语言模型 | MCP = 模型上下文协议 | SQLite = 轻量关系型数据库 | ChromaDB = 向量数据库 | RSS = 简易信息聚合 | SSE = 服务端推送事件 | stdio = 标准输入输出 | WAL = 预写式日志 | DAG = 有向无环图 | ReAct = 推理-行动循环" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=9;fontColor=#757575;fontStyle=2;" vertex="1" parent="1">
+                    <mxGeometry x="80" y="1317" width="1300" height="16" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend_abbr2" value="API = 应用程序接口 | Provider = 模型提供商 | Embedding = 向量嵌入 | ADR = 架构决策记录 | Collection = 向量集合 | CronTrigger = 定时触发器 | stdio = 标准输入输出 | threading.Thread = 后台线程" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;fontSize=9;fontColor=#757575;fontStyle=2;" vertex="1" parent="1">
+                    <mxGeometry x="80" y="1333" width="1300" height="16" as="geometry"/>
                 </mxCell>
             </root>
         </mxGraphModel>
